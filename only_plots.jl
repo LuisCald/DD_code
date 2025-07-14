@@ -28,13 +28,41 @@ println("finished optimization")
 # store_optim_estimate(par_final, label, m_label, data_cutoffs, tag)
 
 # Perform Variance Decomposition
-# n = param_sizes[1][1]
-# b = param_sizes[2][2]
-# A = reshape(par_final[1:n*n], (n, n))
-# B = reshape(par_final[n*n+1:n*n+n*b], (n, b))
-# Ω = Diagonal(par_final[n*n+n*b+1:n*n+n*b+n])
-# Σ = Diagonal(par_final[end-param_sizes[4][1]+1:end])
+smoother_res, logV, alarm = likeli(model_elements, par_final, param_sizes, priors, meas_ind, Σ_ids, model_options; smooth=true)
+@unpack x_smoothed, x_filtered = smoother_res               # F̂_t   (nF × T)
+@unpack u = model_elements
 
+X_choice = x_smoothed
+# --- 1.  VAR(1) residuals and their covariance -----------------------------
+# e = X_choice[:, 2:end] .- L * X_choice[:, 1:end-1]     # (r+q) × (T-1)
+A, B, D, Ω, _ = matrisize(par_final, param_sizes)
+Ω[diagind(Ω)] = log.(exp.(Ω[diagind(Ω)]) .+ 1)
+Ω_full = Ω # Diagonal(diag(cov(e; dims = 2)))                               # (r+q) × (r+q)
+
+nx = size(A, 1)                         # = r  (number of factors)
+nq = size(D, 1)                         # = q  (idiosyncratic AR processes)
+
+Ω_x = Ω_full[1:nx, 1:nx]     # Var(η^x_t)
+Ω_ε = Ω_full[nx+1:end, nx+1:end]     # Var(η^ε_t)
+# (cross blocks are zero in most DSGE/FA set-ups; grab them too if not)
+
+# --- 2.  Reduced-form factor VAR -------------------------------------------
+C = zeros(nq, nx)                       # still zero under your spec
+A_star = A + B * ((I - D) \ C)          # == A here because C == 0
+IA = inv(I - A_star)                   # (I - A*)^{-1}
+
+# --- 3.  “Multiplier” from ε-innovations into x_t ---------------------------
+G = B * ((I - D) \ I(nq))                 # = B (I‒D)^{-1}
+
+# --- 4.  Unconditional variance of factors and shares ----------------------
+var_F = IA * Ω_x * IA' + IA * G * Ω_ε * G' * IA'
+
+part_f = tr(IA * Ω_x * IA')       # contribution of η^x shocks
+part_y = tr(IA * G * Ω_ε * G' * IA')    # contribution of η^ε shocks
+tot_var = part_f + part_y
+
+share_f = part_f / tot_var
+share_y = part_y / tot_var
 
 # New procedure for variance decomposition
 @unpack u = model_elements
@@ -53,113 +81,6 @@ for i in axes(x_filtered, 1)
     Plots.savefig("filtered_state_variable_$i.pdf")
 end
 
-A, B, D, Ω, _ = matrisize(par_final, param_sizes)
-D = Diagonal(diag(D))
-C = zeros(size(D, 1), size(A, 1))
-L = [A B; C D] # VAR(1) representation
-e = X_choice[:, 2:end] - L * X_choice[:, 1:end-1]
-Ω = cov(e; dims=2)                # Var(ε_t)  (nF × nF)
-
-A_star = A + B * (I - D)^(-1) * C
-IA = (I - A_star)^(-1)
-var_F = IA * Ω * IA' + IA * (B * (I - D)^(-1)) * (B * (I - D)^(-1))' * IA'
-
-part_f = tr(IA * Ω * IA')
-part_y = tr(IA * (B * (I - D)^(-1)) * (B * (I - D)^(-1))' * IA')
-tot_var = part_f + part_y
-share_f = part_f / tot_var
-share_y = part_y / tot_var
-
-part_y2 = tr((I - A)^(-1) * (B * B') * (I - A)^(-1)')
-part_f2 = tr((I - A)^(-1) * Ω * (I - A)^(-1)')
-tot_var2 = part_f2 + part_y2
-share_f2 = part_f2 / tot_var2
-share_y2 = part_y2 / tot_var2
-
-
-# ------------------------------------------------------------------
-# 1.  Inputs you already extracted from the smoother / estimation
-# ------------------------------------------------------------------
-@unpack case = model_options
-A, B, _, _ = matrisize(par_final, param_sizes, case)
-# Ω[diagind(Ω)] = log.(exp.(Ω[diagind(Ω)]) .+ 1)
-Y = u
-X_choice = x_filtered
-# ------------------------------------------------------------------
-# 2.  Sample covariances and cross–covariance
-#      cov expects *observations in columns* → no transpose needed
-# ------------------------------------------------------------------
-# Σ_F = cov(X_choice; dims=2)                # Var(F_t)
-# C_FY = (I - A) \ (B)
-# Find residuals
-e = X_choice[:, 2:end] - A * X_choice[:, 1:end-1] - B * Y[:, 1:end-1] # residuals
-Ω = cov(e; dims=2)                # Var(ε_t)  (nF × nF)
-C_FY = cov(X_choice, Y; dims=2)
-Σ_F = lyapd(A, B * B' + A * C_FY * B' + B * C_FY' * A' + Ω)
-Σ_Y = Matrix(I, size(Y, 1), size(Y, 1)) # Var(Y_t) (nY × nY)
-
-# Q = B * Σ_Y * B' + Ω         # everything that hits F_{t+1} unexpectedly
-# Σ_F = lyap(A, Q)         # solves Σ = A Σ A' + Q   (discrete Lyapunov)
-
-
-# ------------------------------------------------------------------
-# 3.  Variance-decomposition matrices
-# ------------------------------------------------------------------
-term_A = A * Σ_F * A'                      # A Σ_F A′
-term_BY = B * Σ_Y * B'                      # B Σ_Y B′
-term_cross = A * C_FY * B' + B * C_FY' * A'    # cross terms
-term_Omega = Ω
-
-# ------------------------------------------------------------------
-# 4.  Shares of total variance  tr(term)/tr(Σ_F)
-# ------------------------------------------------------------------
-trF = tr(Σ_F)
-
-share_A = tr(term_A) / trF
-share_BY = tr(term_BY) / trF
-share_X = tr(term_cross) / trF
-share_Ω = tr(term_Omega) / trF
-println("  ------ check sum    : ", round(share_A + share_BY + share_X + share_Ω, digits=4))
-
-# Variance formula 
-
-# println("Optimization done")
-# par_final = vec(Matrix(CSV.read("/home/luisc/Distributional_Dynamics/7_Results/consum_and_income_and_wealth Γ estimated/from_mcmc/parameter_vectors/solution3D_A non-diag.jld2", DataFrame, header=0)))
-# par_final = vec(Matrix(CSV.read("/Users/lc/Dropbox/Distributional_Dynamics/7_Results/consum_and_income_and_wealth/from_optimization/parameter_vectors/solution3D_A non-diag_A.csv", DataFrame, header=0)))
-# Increase measurement error a bit 
-# θ_cop[20*20+20*37+20+1:end] = θ_cop[20*20+20*37+20+1:end] ./4
-
-# get the off diagonal of A 
-# A    = reshape(θ_cop[1:19*19], (19,19))
-# od_A = offdiag(A)
-# describe(od_A)
-
-# Issues: handling of missing of SCF ... do we 
-
-# Getting dimensions of each matrix within the parameter vector
-# dimensions = [prod(param_sizes[i]) for i in 1:length(param_sizes)]
-# condition_Σ = dimensions[1]+dimensions[2]+1:dimensions[1]+dimensions[2]+19
-# θ_cop[condition_Σ] .= θ_cop[condition_Σ] ./ 5
-
-# mean(diag(priors[1].Σ)[dimensions[1]+1:dimensions[1]+dimensions[2]])
-# mean(diag(priors[1].Σ)[1:dimensions[1]])
-
-# @unpack minnesota_params = model_options
-# minnesota_params = [0.2, 0.3, 100, .01, 2.0, 0.95]
-# @pack! model_options = minnesota_params
-
-# θ_cop = θ1
-# init_path = dirname(pwd())[end-7:end] == "Dynamics" ? dirname(pwd()) : pwd()
-# DelimitedFiles.writedlm(init_path * "/7_Results/income_and_wealth/from_mcmc/parameter_vectors/posterior_mean_" * "july7.csv",  θ_cop, ',')
-
-# θ_cop[19*19+1:19*19+19*36] = θ_cop[19*19+1:19*19+19*36] ./ 2
-# aggs_start_finish = hcat(priors[1].μ[19*19+1:19*19+19*36], θ_cop[19*19+1:19*19+19*36])
-# CSV.write("aggs_params.csv", DataFrame(aggs_start_finish, :auto))
-# θ_cop[19*19+1:19*19+19*12] = θ_cop[19*19+1:19*19+19*12] .* 1.5
-
-# θ_cop[19*19+1:19*19+19*23] = θ_cop[19*19+1:19*19+19*23] *.5
-# θ_cop[1:20:19*19] .= .90
-
 
 # off_diagonal_indices = setdiff(1:19^2, diagind(A))
 # θ_cop[off_diagonal_indices] .= 0  
@@ -172,52 +93,6 @@ B = reshape(par_final[n*n+1:n*n+n*b], (n, b))
 
 
 
-# par_final[n*n+n*b+1:n*n+n*b+n] .= par_final[n*n+n*b+1:n*n+n*b+n] .* 10
-# par_final[end-param_sizes[4][1]+1:end] .= par_final[end-param_sizes[4][1]+1:end] ./ 10
-
-# par_final[end-param_sizes[4][1]+1] = .1
-# par_final[end-param_sizes[4][1]+4] = 2
-# par_final[end-param_sizes[4][1]+1:end] .= 1
-# par_final[n*n+1:n*n+n*b] .= par_final[n*n+1:n*n+n*b] ./ 2
-
-# # par_final[end] = par_final[end] * 10
-# # par_final[end-4] = par_final[end-4] / 2
-
-# par_final[end-param_sizes[4][1]+1:end] .= par_final[end-param_sizes[4][1]+1:end] .* 10
-
-
-# par_final[n*n+1:n*n+n*b] .= par_final[n*n+1:n*n+n*b] ./ 2
-
-# par_final[end-7] = par_final[end-7] .* 1000
-
-# par_final[end-param_sizes[4][1]+1:end] = [4, 2, 3, 3, 4, 2, 3, 4, 4, 3, 3]
-# par_final[end-param_sizes[4][1]+1:end] .= par_final[end-param_sizes[4][1]+1:end] .* 2
-
-# # HACK 
-# par_final[n*n+n*b+1:n*n+n*b+n] .= par_final[n*n+n*b+1:n*n+n*b+n] ./ 2
-# par_final[end-7] = par_final[end-7] .* 1000 #CPS 
-
-# init_path = dirname(pwd())[end-7:end] == "Dynamics" ? dirname(pwd()) : pwd()
-# DelimitedFiles.writedlm(init_path * "/7_Results/$m_label/from_optimization/parameter_vectors/solution" * "$label.csv",  par_final, ',') 
-
-# θ_cop[end-param_sizes[4][1]+1] = θ_cop[end-param_sizes[4][1]+1] ./ 100
-# a = par_final[end-param_sizes[4][1]+1:end]
-# a = a .* 100
-# par_final[end-param_sizes[4][1]+1:end] .= a
-
-# par_final[end-param_sizes[4][1]+1] = 20.0
-# θ_cop[n*n+n*b+1:n*n+n*b+n] .= θ_cop[n*n+n*b+1:n*n+n*b+n] .* 2
-# θ_cop[19*19+19*36+19+1:end] = θ_cop[19*19+19*36+19+1:end] .* 10
-# smoother_output, _               = likeli(model_elements, par_final, param_sizes, priors, meas_ind, Σ_ids, model_options, true)
-# @unpack x_filtered  = smoother_output
-
-# @unpack compare_to_other_est = model_options
-# compare_to_other_est = false
-# @pack! model_options = compare_to_other_est
-# init_path     = dirname(pwd())[end-7:end] == "Dynamics" ? dirname(pwd()) : pwd()
-# a = jldopen(init_path * "/posterior_draws" * "/" * m_label * "_$tag.jld2")
-# par_final = mean(a["d_chains"][end, :, :][:,:], dims=1)
-# store_optim_estimate(par_final, label, m_label, data_cutoffs, tag)
 
 @unpack tmin, tmax = time_params
 @unpack gdp_series = obs_data
@@ -284,7 +159,7 @@ export_table_to_tex_with_strings(measures, type)
 # Generate microdata implicates
 # include("CreateTimeSeries.jl")
 # generate_microdata_implicates(200, "SCF", param_sizes, priors, meas_ind, Σ_ids, model_elements, obs_data, model_options, time_params, data_sources, tag)
-# generate_microdata_implicates(200, "CEX_all", param_sizes, priors, meas_ind, Σ_ids, model_elements, obs_data, model_options, time_params, data_sources, tag)
+# generate_microdata_implicates(200, "CEX", param_sizes, priors, meas_ind, Σ_ids, model_elements, obs_data, model_options, time_params, data_sources, tag)
 # generate_microdata_implicates(draws, "PSID", param_sizes, priors, meas_ind, Σ_ids, model_elements, obs_data, model_options, time_params, data_sources, tag)
 
 
@@ -314,6 +189,6 @@ for i in cex_years
 end
 filtering_criteria = Dict("periods_to_remove" => dvec)
 
-perform_forecast("CEX_all", par_final, param_sizes, priors, meas_ind, Σ_ids, filtering_criteria, obs_data, model_options, model_elements, time_params, user_t, func_data, kind_of_plots, ["extensive", "data_only"])
+perform_forecast("CEX", par_final, param_sizes, priors, meas_ind, Σ_ids, filtering_criteria, obs_data, model_options, model_elements, time_params, user_t, func_data, kind_of_plots, ["extensive", "data_only"])
 
 

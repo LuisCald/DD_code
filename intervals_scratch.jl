@@ -1,11 +1,11 @@
 init_path                   = dirname(pwd())[end-7:end] == "Dynamics" ? dirname(pwd()) : pwd()
-cex_all                     = jldopen(init_path * "/2_Data_processing/confidence_intervals/ci_consum_and_income_and_wealth_deciles_CEX_allnpimp" * ".jld2", "r")
-cex_confidence_intervals    = cex_all["ci"]
+cex                     = jldopen(init_path * "/2_Data_processing/confidence_intervals/ci_consum_and_income_and_wealth_deciles_cexnpimp" * ".jld2", "r")
+cex_confidence_intervals    = cex["ci"]
 dist_dict = Dict("bottom" => 1:5, "middle" => 6:9, "top" => 10)
 
 for j in ["income", "consum"]
-    a = cex_confidence_intervals["CEX_all"]["ci_u"][j]["quantiles"]
-    b = cex_confidence_intervals["CEX_all"]["ci_l"][j]["quantiles"]
+    a = cex_confidence_intervals["CEX"]["ci_u"][j]["quantiles"]
+    b = cex_confidence_intervals["CEX"]["ci_l"][j]["quantiles"]
 
     for (s,k) in dist_dict
         Plots.plot()
@@ -21,29 +21,29 @@ end
 aci_dist_old = jldopen("/Users/lc/Dropbox/Distributional_Dynamics/2_Data_processing/confidence_intervals/ci_consum_and_income_and_wealth_deciles_CEX_and_CPS_and_CPS2_and_PSID_and_SCFnpimp_all2.jld2", "r")
 aci_dist_old = aci_dist_old["ci"]
 
-# Save the data from CEX_all 
+# Save the data from cex 
 @unpack func_dict = func_struct
 
-# Save func_dict["CEX_all"] in jld2 format
+# Save func_dict["CEX"] in jld2 format
 init_path = dirname(pwd())[end-7:end] == "Dynamics" ? dirname(pwd()) : pwd()
-save_path = init_path * "/2_Data_processing/data_consum_and_income_and_wealth_deciles_CEX_allnpimp" * ".jld2"
-JLD2.save(save_path, "CEX_all", func_dict["CEX_all"])
+save_path = init_path * "/2_Data_processing/data_consum_and_income_and_wealth_deciles_cexnpimp" * ".jld2"
+JLD2.save(save_path, "CEX", func_dict["CEX"])
 
 # import CEX all confidence intervals 
-cex_all = jldopen("/Users/lc/Dropbox/Distributional_Dynamics/2_Data_processing/confidence_intervals/ci_consum_and_income_and_wealth_deciles_npimp.jld2", "r")
-cex_all = cex_all["ci"]
+cex = jldopen("/Users/lc/Dropbox/Distributional_Dynamics/2_Data_processing/confidence_intervals/ci_consum_and_income_and_wealth_deciles_npimp.jld2", "r")
+cex = cex["ci"]
 
 
 # import liquid confidence intervals 
-w_CEX_all = jldopen("/Users/lc/Dropbox/Distributional_Dynamics/2_Data_processing/confidence_intervals/ci_consum_and_income_and_wealth_ventiles_series_CEX_all_and_CPS_and_CPS2_and_PSID_and_SCF_all.jld2", "r")
-w_CEX_all = w_CEX_all["ci"]
+w_cex = jldopen("/Users/lc/Dropbox/Distributional_Dynamics/2_Data_processing/confidence_intervals/ci_consum_and_income_and_wealth_ventiles_series_cex_and_CPS_and_CPS2_and_PSID_and_SCF_all.jld2", "r")
+w_cex = w_cex["ci"]
 
 ci_dist_old = jldopen("/Users/lc/Dropbox/Distributional_Dynamics/2_Data_processing/confidence_intervals/ci_consum_and_income_and_wealth_deciles_CEX_and_CPS_and_CPS2_and_PSID_and_SCFnpimp_all.jld2", "r")
 ci_dist_old = ci_dist_old["ci"]
-ci_dist_old["CEX"] = w_CEX_all["CEX_all"]
+ci_dist_old["CEX"] = w_cex["CEX"]
 
 init_path = dirname(pwd())[end-7:end] == "Dynamics" ? dirname(pwd()) : pwd()
-save_path = init_path * "/2_Data_processing/confidence_intervals/ci_consum_and_income_and_wealth_deciles_CEX_all_and_CPS_and_CPS2_and_PSID_and_SCFnpimp_all.jld2"
+save_path = init_path * "/2_Data_processing/confidence_intervals/ci_consum_and_income_and_wealth_deciles_cex_and_CPS_and_CPS2_and_PSID_and_SCFnpimp_all.jld2"
 JLD2.save(save_path, "ci", ci_dist_old)
 
 # import PSID confidence intervals 
@@ -60,10 +60,10 @@ save_path = init_path * "/2_Data_processing/confidence_intervals/ci_consum_and_i
 JLD2.save(save_path, "ci", ci_dist_old)
 
 # import CEX intervals, change something and save 
-CEX = jldopen("/Users/lc/Dropbox/Distributional_Dynamics/5_Code/ci_draws_consum_and_income_and_wealth_deciles_series_CEX_all_all.jld2", "r")
+CEX = jldopen("/Users/lc/Dropbox/Distributional_Dynamics/5_Code/ci_draws_consum_and_income_and_wealth_deciles_series_cex_all.jld2", "r")
 CEX = CEX["ci"]
 init_path = dirname(pwd())[end-7:end] == "Dynamics" ? dirname(pwd()) : pwd()
-save_path = init_path * "/5_Code/ci_draws_consum_and_income_and_wealth_deciles_series_CEX_all_all_test.jld2"
+save_path = init_path * "/5_Code/ci_draws_consum_and_income_and_wealth_deciles_series_cex_all_test.jld2"
 
 for m in ["income", "consum", "wealth"]
     for o in ["quantiles", "shares", "levels"]
@@ -78,23 +78,23 @@ end
 
 #################################################################################
 # import the noise distributions 
-noise_dist = jldopen("/Users/lc/Dropbox/Distributional_Dynamics/2_Data_processing/noise_distributions/noise_draws_consum_and_income_and_wealth_deciles_series_CEX_all_all.jld2", "r")
+noise_dist = jldopen("/Users/lc/Dropbox/Distributional_Dynamics/2_Data_processing/noise_distributions/noise_draws_consum_and_income_and_wealth_deciles_series_cex_all.jld2", "r")
 noise_dist = noise_dist["noise"]
 
-noise_dist = jldopen("/home/luisc/Distributional_Dynamics/noise_distributions/noise_draws_consum_and_income_and_wealth_deciles_series_CEX_all_all.jld2", "r")
+noise_dist = jldopen("/home/luisc/Distributional_Dynamics/noise_distributions/noise_draws_consum_and_income_and_wealth_deciles_series_cex_all.jld2", "r")
 
 # Replace 0.0 with NaN 
 replace!(noise_dist, 0.0=>NaN)
 
 # Save the new noise distribution file
 init_path = dirname(pwd())[end-7:end] == "Dynamics" ? dirname(pwd()) : pwd()
-save_path = init_path * "/5_Code/noise_draws_consum_and_income_and_wealth_deciles_series_CEX_all_all.jld2"
+save_path = init_path * "/5_Code/noise_draws_consum_and_income_and_wealth_deciles_series_cex_all.jld2"
 jldopen(save_path, "w") do file
     file["noise"] = noise_dist
 end
 
 
-noise_dist = jldopen("/home/luisc/Distributional_Dynamics/noise_distributions/noise_draws_consum_and_income_and_wealth_deciles_series_CEX_all_all.jld2", "r")
+noise_dist = jldopen("/home/luisc/Distributional_Dynamics/noise_distributions/noise_draws_consum_and_income_and_wealth_deciles_series_cex_all.jld2", "r")
 noise_dist = noise_dist["noise"]
 noise_dist[1]["CEX"]
 
@@ -124,17 +124,17 @@ init_path = dirname(pwd())[end-7:end] == "Dynamics" ? dirname(pwd()) : pwd()
 save_path = init_path * "/2_Data_processing/confidence_intervals/ci_consum_and_income_and_wealth_deciles_CEX_and_CPS_and_CPS2_and_PSID_and_SCFnpimp_all2.jld2"
 JLD2.save(save_path, "ci", ci_dist_old)
 
-# Now do the same thing for the confidence intervals for the CEX_all data
-ci_dist = jldopen("/Users/lc/Dropbox/Distributional_Dynamics/2_Data_processing/confidence_intervals/ci_consum_and_income_and_wealth_deciles_CEX_allnpimp_new.jld2", "r")
+# Now do the same thing for the confidence intervals for the cex data
+ci_dist = jldopen("/Users/lc/Dropbox/Distributional_Dynamics/2_Data_processing/confidence_intervals/ci_consum_and_income_and_wealth_deciles_cexnpimp_new.jld2", "r")
 ci_dist = ci_dist["ci"]
 
-ci_dist_old = jldopen("/Users/lc/Dropbox/Distributional_Dynamics/2_Data_processing/confidence_intervals/ci_consum_and_income_and_wealth_deciles_CEX_and_CEX_all_and_PSIDnpimp.jld2", "r")
+ci_dist_old = jldopen("/Users/lc/Dropbox/Distributional_Dynamics/2_Data_processing/confidence_intervals/ci_consum_and_income_and_wealth_deciles_CEX_and_cex_and_PSIDnpimp.jld2", "r")
 ci_dist_old = ci_dist_old["ci"]
-ci_dist["CEX_all"] = ci_dist_old["CEX_all"]
+ci_dist["CEX"] = ci_dist_old["CEX"]
 
 # Save the new noise distribution file
 init_path = dirname(pwd())[end-7:end] == "Dynamics" ? dirname(pwd()) : pwd()
-save_path = init_path * "/2_Data_processing/confidence_intervals/ci_consum_and_income_and_wealth_deciles_CEX_allnpimp_new.jld2"
+save_path = init_path * "/2_Data_processing/confidence_intervals/ci_consum_and_income_and_wealth_deciles_cexnpimp_new.jld2"
 JLD2.save(save_path, "ci", ci_dist)
 
 
@@ -159,7 +159,7 @@ cond                   = mapslices(col -> all(col .!==NaN), e, dims = 1)[:]
 findall(x -> x == true, cond)
 clean_sub_boot_dict!(psid_int)
 
-# Open this file /Users/lc/Dropbox/Distributional_Dynamics/2_Data_processing/noise_distributions/noise_draws_consum_and_income_and_wealth_ventiles_series_CEX_all_all.jld2
+# Open this file /Users/lc/Dropbox/Distributional_Dynamics/2_Data_processing/noise_distributions/noise_draws_consum_and_income_and_wealth_ventiles_series_cex_all.jld2
 noise_scf = jldopen("/Users/lc/Dropbox/Distributional_Dynamics/2_Data_processing/noise_distributions/noise_draws_consum_and_income_and_wealth_ventiles_series_PSID_all.jld2", "r")
 noise_scf2 = noise_scf["noise"];
 
@@ -298,7 +298,7 @@ a = (!isnan).(psid_int["copula"][:, 1, 1])
 dct(reshape(psid_int["copula"][a, 1, 1], (10, 10))) ./ sqrt(10)
 
 # the plan now is to re-do the confidence intervals s.t. they are reflecting the actual object. This means I have DCT them and do the scale correction for the copulas based on what is observed or not
-datasets = ["PSID", "SCF", "CEX_all", "CPS2", "CPS"]
+datasets = ["PSID", "SCF", "CEX", "CPS2", "CPS"]
 datasets = ["SCF"]
 measures = ["consum", "income", "wealth"]
 grid_size_data_cop = 10
@@ -369,7 +369,7 @@ end
 cis["copula"] 
 cis["wealth"]["quantiles"]
 
-cis = jldopen("/Users/lc/Dropbox/Distributional_Dynamics/2_Data_processing/confidence_intervals/ci_draws_consum_and_income_and_wealth_ventiles_series_CEX_all_all_test.jld2", "r")["ci"]
+cis = jldopen("/Users/lc/Dropbox/Distributional_Dynamics/2_Data_processing/confidence_intervals/ci_draws_consum_and_income_and_wealth_ventiles_series_cex_all_test.jld2", "r")["ci"]
 d = (!isnan).(cis["copula"][:, 1, 1])
 reshape(cis["copula"][a, 2, 1], (10, 10))
 

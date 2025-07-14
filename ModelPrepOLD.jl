@@ -1,35 +1,44 @@
-function X13_seasonality_adjustment!(df; over_what="rows")
+function X13_seasonality_adjustment!(df, time_dict; over_what="rows")
     # Find rows with at least one observation 
-    local condition_axes
-    if over_what == "rows"
-        condition_axes = findall(row -> !all(isnan, row), eachrow(df))
-    elseif over_what == "columns"
-        condition_axes = findall(col -> !all(isnan, col), eachcol(df))
-    end
+    condition_axes = findall(row -> !all(isnan, row), eachrow(df))
 
     # Loop over these rows
-    for i in condition_axes
-        indexing = over_what == "rows" ? tuple(i, :) : tuple(:, i)
-        condition = .!isnan.(df[indexing...])
-        indexing2 = over_what == "rows" ? tuple(i, condition) : tuple(:, condition)
+    for (j, i) in enumerate(condition_axes)
+        indexing = tuple(i, :)
+
+        # Find indices of NaNs across columns
+        nan_ids = findall(isnan, df[indexing...])
+        date_of_period = time_dict[j]
+        yr = year(date_of_period)
+        qr = quarter(date_of_period)
 
         # Fails for immutable row, makes sense 
-        # R"""
-        # library(x12)
-        #     x12_object <- new("x12Single", ts = ts($(df[indexing2...]), frequency=4))
+        R"""
+        library(x12)
+        library(seasonal)    # install.packages("seasonal") once if needed
 
-        #     an.error.occured <- FALSE
-        #     tryCatch( { adjusted_data <- x12(x12_object); print("success") }
-        #               , error = function(e) {an.error.occured <<- TRUE})
-        #     print(an.error.occured)
-        #     print($i)
+        ts_obj <- ts($(df[indexing...]),
+                    frequency = 4,
+                    start = c($(yr), $(qr)))
 
-        #     # adjusted_data <- x12(x12_object)
-        #     d <- adjusted_data@x12Output@d11
-        # """
-        # @rget d
+        an.error.occured <- FALSE
+        tryCatch({
+            adjusted <- seas(ts_obj,
+                            na.action = na.x13
+                            )
+        print("success")
+            d <- final(adjusted)                   # == X-11 d11 series
+        }, error = function(e) {
+            an.error.occured <<- TRUE
+        })
+
+        print(an.error.occured)
+        print($i)
+        """
+        @rget d
         try
-            df[indexing2...] = d
+            df[i, :] = d
+            df[i, nan_ids...] .= NaN
         catch ee
             println(i)
         end
@@ -37,6 +46,17 @@ function X13_seasonality_adjustment!(df; over_what="rows")
 
     return df
 end
+
+# x12_object <- new("x12Single", ts = ts($(df[indexing...]), frequency=4, start=c($(time_dict["year"][i]), $(time_dict["quarter"][i]))))
+
+# an.error.occured <- FALSE
+# tryCatch( { adjusted_data <- x12(x12_object); print("success") }
+#           , error = function(e) {an.error.occured <<- TRUE})
+# print(an.error.occured)
+# print($i)
+
+# # adjusted_data <- x12(x12_object)
+# d <- adjusted_data@x12Output@d11
 
 
 function find_meas_indices(measures, meas, grid)
@@ -50,15 +70,15 @@ function find_meas_indices(measures, meas, grid)
     return [pcf_id...]
 end
 
-function remove_seasonality_from_quarterly_data!(dfs, names)
+function remove_seasonality_from_quarterly_data!(dfs, names, time_dict)
     sim_data = filter(x -> occursin("SimData", x), names)
-    datasets_that_need_adjustment = ["SIPP1", "SIPP2", sim_data...]
+    datasets_that_need_adjustment = ["SIPP1", "SIPP2", sim_data..., "CEX"]
 
     # if "SIPP1" ∈ names || "SIPP2" ∈ names || ocurrin("SimData", names[1])
     for j in datasets_that_need_adjustment
         try
             df_id = findall(x -> x == j, names)[1]
-            X13_seasonality_adjustment!(dfs[df_id])
+            X13_seasonality_adjustment!(dfs[df_id], time_dict[df_id])
         catch ee
             println(ee)
             println("No dataset $j found.")
@@ -91,7 +111,7 @@ function estimation_prep(obs_data::ObservedData, model_options::ModelOptions)
 
     # Remove seasonality of specific datasets, only if OS is not mac
     @info("Removing seasonality from quarterly data.")
-    remove_seasonality_from_quarterly_data!(dfs, df_vec.df_names)
+    remove_seasonality_from_quarterly_data!(dfs, df_vec.df_names, time_dict)
 
     # Using time parameters from data and from aggregates, we find an agreeable time frame for the estimation
     time_p = define_timeframe(agg_data, year_vec, freq_type, time_dict, data_cutoffs) # TODO: time_dict needs to be filtered as well  
@@ -1175,8 +1195,8 @@ function perform_pca(pool, measures, type, tag; additional_data_blocks=false, be
         # M = MultivariateStats.fit(PCA, rr; method=:svd)
 
         if additional_data_blocks != false
-            if tag == " PP CEX_all every 4 years"
-                file_name = "/home/luisc/Distributional_Dynamics/7_Results/consum_and_income_and_wealth PP CEX_all/other_results/CEX_block.jld2"
+            if tag == " PP CEX every 4 years"
+                file_name = "/home/luisc/Distributional_Dynamics/7_Results/consum_and_income_and_wealth PP CEX_annual/other_results/CEX_block.jld2"
                 additional_data_blocks = jldopen(file_name, "r")["block"]
             end
             println(size(additional_data_blocks[1]))

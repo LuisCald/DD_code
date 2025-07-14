@@ -393,7 +393,7 @@ function get_estimates_for_comparison(data_name, ty, time_p, measures, estimator
     grid_choice_pcf = typeof(estimator) <: SeriesEstimator ? integral_pcf_grid : grid_pcf
     grid_choice_cop = typeof(estimator) <: SeriesEstimator ? integral_cop_grid : grid_cop
 
-    plot_name = occursin("CEX_all", data_name) ? "CEX" : data_name
+    plot_name = occursin("CEX", data_name) ? "CEX" : data_name
 
     if data_name != "SCF" && plot_name != "CEX"
         return Dict()
@@ -409,7 +409,7 @@ function get_estimates_for_comparison(data_name, ty, time_p, measures, estimator
 
         # Download cex_all data
         # cex_all_data                = jldopen(init_path * "/2_Data_processing/data_consum_and_income_and_wealth_deciles_CEX_allnpimp" * ".jld2", "r")
-        # cex_all_data                = cex_all_data["CEX_all"]
+        # cex_all_data                = cex_all_data["CEX"]
         # measures                    = setdiff(collect(keys(cex_all_data)), ["copulas"])
 
         estimates_dict = Dict()
@@ -417,16 +417,16 @@ function get_estimates_for_comparison(data_name, ty, time_p, measures, estimator
         # Download cex_all estimates 
         local est_tags
         if plot_name == "CEX"
-            est_tags = ["every 4 years", "PP CEX_all every 4 years"] # CEX for 'every 4 years', CEX_all for 'additional factors'
+            est_tags = ["every 4 years", "PP CEX every 4 years"] # CEX for 'every 4 years', CEX_all for 'additional factors'
         elseif plot_name == "SCF"
             # #TODO: for some reason, each vector of tags cannot overlap ... so e.g., "additional factors", "less factors" cannot be used for "SCF" and "CEX" at the same time
             est_tags = [
                 "excluding recent 20 quarters",
                 "excluding housing cycle",
                 "excluding housing cycle short",
-                "PP CEX_all excluding housing cycle",
-                "PP CEX_all excluding housing cycle short",
-                "PP CEX_all excluding recent 20 quarters",
+                "PP CEX excluding housing cycle",
+                "PP CEX excluding housing cycle short",
+                "PP CEX excluding recent 20 quarters",
                 "6 factors",
                 "7 factors",
                 "less DF and AF",
@@ -435,9 +435,9 @@ function get_estimates_for_comparison(data_name, ty, time_p, measures, estimator
                 "Γ estimated",
                 "Γ all",
                 "Γ all 85",
-                "PP CEX_all",
+                "PP CEX",
                 "PP SCF",
-                "PP CEX_all SCF"
+                "PP CEX SCF"
             ]
         end
 
@@ -581,7 +581,7 @@ function generate_quantiles_shares_levels_plots(data_dict, ty, func_data, data_n
     end
 
     within_stat_dict = Dict()
-    plot_name = occursin("CEX_all", data_name) ? "CEX" : data_name
+    plot_name = occursin("CEX", data_name) ? "CEX" : data_name
 
     # Generate the within statistic for the copulas 
     dimension = length(measures)
@@ -872,9 +872,9 @@ function generate_quantiles_shares_levels_plots(data_dict, ty, func_data, data_n
                                     "Γ estimated",
                                     "Γ all",
                                     "Γ all 85",
-                                    "PP CEX_all",
+                                    "PP CEX",
                                     "PP SCF",
-                                    "PP CEX_all SCF"
+                                    "PP CEX SCF"
                                 ]
 
                                 local ρ, housing_ids, last20_ids
@@ -984,7 +984,7 @@ function generate_quantiles_shares_levels_plots(data_dict, ty, func_data, data_n
                                     guidefontsize=14,
                                     xticks=(s_axis[1:20:end], [L"%$(date)"[1:5] * "\$" for (_, date) in enumerate(s_dts[1:20:end])]),
                                     legend=:best, # BUG: with twinx(), legend=:outertopright widens the plot in a weird way
-                                    label=esttag == "7 factors" ? L"\textrm{7 \,\, Factors}" : esttag == "6 factors" ? L"\textrm{6 \,\, Factors}" : esttag == "less factors" ? L"\textrm{Less \,\, Factors}" : esttag == "higher order15" ? L"\textrm{Higher \,\, Order}" : esttag == "less AF" ? L"\textrm{Less \,\,Agg.\,\, Factors}" : esttag == "less DF and AF" ? L"\textrm{Compact\,\, Model}" : esttag == "Γ estimated" ? L"\textrm{Γ\,\, estimated}" : esttag == "Γ all" ? L"\textrm{Γ-10}" : esttag == "more AF" ? L"\textrm{More\,\,Agg.\,\,Factors}" : esttag == "Γ all 85" ? L"\textrm{Γ-12}" : esttag == "PP CEX_all" ? L"\textrm{\Gamma_{aug}\,\, CEX}" : esttag == "PP SCF" ? L"\textrm{\Gamma_{aug}\,\, SCF}" : esttag == "PP CEX_all SCF" ? L"\textrm{\Gamma_{aug}\,\, CEX-SCF}" : L"\textrm{Less \,\, Data}",
+                                    label=esttag == "7 factors" ? L"\textrm{7 \,\, Factors}" : esttag == "6 factors" ? L"\textrm{6 \,\, Factors}" : esttag == "less factors" ? L"\textrm{Less \,\, Factors}" : esttag == "higher order15" ? L"\textrm{Higher \,\, Order}" : esttag == "less AF" ? L"\textrm{Less \,\,Agg.\,\, Factors}" : esttag == "less DF and AF" ? L"\textrm{Compact\,\, Model}" : esttag == "Γ estimated" ? L"\textrm{Γ\,\, estimated}" : esttag == "Γ all" ? L"\textrm{Γ-10}" : esttag == "more AF" ? L"\textrm{More\,\,Agg.\,\,Factors}" : esttag == "Γ all 85" ? L"\textrm{Γ-12}" : esttag == "PP CEX" ? L"\textrm{\Gamma_{aug}\,\, CEX}" : esttag == "PP SCF" ? L"\textrm{\Gamma_{aug}\,\, SCF}" : esttag == "PP CEX SCF" ? L"\textrm{\Gamma_{aug}\,\, CEX-SCF}" : L"\textrm{Less \,\, Data}",
                                     dpi=500, ls=:dot,
                                 )
 
@@ -1255,7 +1255,7 @@ function generate_quantiles_shares_levels_plots(data_dict, ty, func_data, data_n
                                     guidefontsize=14,
                                     xticks=(s_axis[1:20:end], [L"%$(date)"[1:5] * "\$" for (_, date) in enumerate(s_dts[1:20:end])]),
                                     legend=:best,
-                                    label=esttag == "7 factors" ? L"\textrm{7 \,\, Factors}" : esttag == "6 factors" ? L"\textrm{6 \,\, Factors}" : esttag == "less factors" ? L"\textrm{Less \,\, Factors}" : esttag == "higher order15" ? L"\textrm{Higher \,\, Order}" : esttag == "less AF" ? L"\textrm{Less \,\,Agg.\,\, Factors}" : esttag == "less DF and AF" ? L"\textrm{Compact\,\, Model}" : esttag == "Γ estimated" ? L"\textrm{Γ\,\, estimated}" : esttag == "Γ all" ? L"\textrm{Γ-10}" : esttag == "more AF" ? L"\textrm{More\,\,Agg.\,\,Factors}" : esttag == "Γ all 85" ? L"\textrm{Γ-12}" : esttag == "PP CEX_all" ? L"\textrm{\Gamma_{aug}\,\, CEX}" : esttag == "PP SCF" ? L"\textrm{\Gamma_{aug}\,\, SCF}" : esttag == "PP CEX_all SCF" ? L"\textrm{\Gamma_{aug}\,\, CEX-SCF}" : L"\textrm{Less \,\, Data}",
+                                    label=esttag == "7 factors" ? L"\textrm{7 \,\, Factors}" : esttag == "6 factors" ? L"\textrm{6 \,\, Factors}" : esttag == "less factors" ? L"\textrm{Less \,\, Factors}" : esttag == "higher order15" ? L"\textrm{Higher \,\, Order}" : esttag == "less AF" ? L"\textrm{Less \,\,Agg.\,\, Factors}" : esttag == "less DF and AF" ? L"\textrm{Compact\,\, Model}" : esttag == "Γ estimated" ? L"\textrm{Γ\,\, estimated}" : esttag == "Γ all" ? L"\textrm{Γ-10}" : esttag == "more AF" ? L"\textrm{More\,\,Agg.\,\,Factors}" : esttag == "Γ all 85" ? L"\textrm{Γ-12}" : esttag == "PP CEX" ? L"\textrm{\Gamma_{aug}\,\, CEX}" : esttag == "PP SCF" ? L"\textrm{\Gamma_{aug}\,\, SCF}" : esttag == "PP CEX SCF" ? L"\textrm{\Gamma_{aug}\,\, CEX-SCF}" : L"\textrm{Less \,\, Data}",
                                     dpi=500, ls=:dot,
                                 )
 
@@ -1271,9 +1271,9 @@ function generate_quantiles_shares_levels_plots(data_dict, ty, func_data, data_n
                                     "Γ estimated",
                                     "Γ all",
                                     "Γ all 85",
-                                    "PP CEX_all",
+                                    "PP CEX",
                                     "PP SCF",
-                                    "PP CEX_all SCF"
+                                    "PP CEX SCF"
                                 ]
 
                                 local non_overlap_ids, overlap_ids
@@ -1927,7 +1927,7 @@ function generate_microdata_implicates(draws, k, param_sizes, priors, meas_ind, 
         lower_bound[meas], upper_bound[meas] = conservative_bounds(q_dict[meas], 3)
     end
 
-    save_name = k == "CEX_all" ? "CEX" : k
+    save_name = k == "CEX_pooled" ? "CEX" : k
 
     # Export the bounds 
     jldsave(init_path * "/7_Results/$m_label" * "$tag" * "/from_mcmc/data/" * save_name * "_bounds" * ".jld2"; lb=lower_bound, ub=upper_bound, q_dict=q_dict)
@@ -2104,14 +2104,14 @@ function export_table_to_tex_with_strings(measures, type)
         "excluding recent 20 quarters",
         "excluding housing cycle short",
         "every 4 years",
-        "PP CEX_all excluding housing cycle",
-        "PP CEX_all excluding housing cycle short",
-        "PP CEX_all excluding recent 20 quarters",
-        "PP CEX_all every 4 years"
+        "PP CEX excluding housing cycle",
+        "PP CEX excluding housing cycle short",
+        "PP CEX excluding recent 20 quarters",
+        "PP CEX every 4 years"
     ]
 
     # Import tables 
-    for data_name in ["SCF", "CEX_all"]
+    for data_name in ["SCF", "CEX"]
         cycle_dict = jldopen(path * "correlations/" * "correlations_dict_cycle_" * data_name * ".jld2")["corr"]
 
         # Initialize the LaTeX table string
@@ -2128,7 +2128,7 @@ function export_table_to_tex_with_strings(measures, type)
             if header ∉ collect(keys(cycle_dict[first_m]))
                 nothing
             else
-                header_label = header == "excluding housing cycle" ? "Excluding Housing Cycle" : header == "excluding recent 20 quarters" ? "Excluding Last 4 Years" : header == "excluding housing cycle short" ? "Excluding Housing Cycle \\#2" : header == "PP CEX_all excluding housing cycle" ? "CEX Factor excluding housing cycle" : header == "PP CEX_all excluding housing cycle short" ? "CEX Factor excluding housing cycle short" : header == "PP CEX_all excluding recent 20 quarters" ? "CEX Factor excluding recent 20 quarters" : header == "PP CEX_all every 4 years" ? "CEX Factor every 4 years" : "Every 4 Years"
+                header_label = header == "excluding housing cycle" ? "Excluding Housing Cycle" : header == "excluding recent 20 quarters" ? "Excluding Last 4 Years" : header == "excluding housing cycle short" ? "Excluding Housing Cycle \\#2" : header == "PP CEX excluding housing cycle" ? "CEX Factor excluding housing cycle" : header == "PP CEX excluding housing cycle short" ? "CEX Factor excluding housing cycle short" : header == "PP CEX excluding recent 20 quarters" ? "CEX Factor excluding recent 20 quarters" : header == "PP CEX every 4 years" ? "CEX Factor every 4 years" : "Every 4 Years"
 
                 # Add header section
                 table *= """

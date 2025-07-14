@@ -5,7 +5,7 @@ function retrieve_data_files()
         files = Dict(
             "SCF" => raw"/home/luisc/Distributional_Dynamics/2_Data_processing/SCF.csv",
             "PSID" => raw"/home/luisc/Distributional_Dynamics/2_Data_processing/PSID.csv",
-            "CEX_all" => raw"/home/luisc/Distributional_Dynamics/2_Data_processing/CEX_all.csv",
+            "CEX" => raw"/home/luisc/Distributional_Dynamics/2_Data_processing/CEX.csv",
             # "CEX" => raw"/home/luisc/Distributional_Dynamics/CEX.csv", 
             "CPS" => raw"/home/luisc/Distributional_Dynamics/2_Data_processing/CPS.csv",
             "CPS2" => raw"/home/luisc/Distributional_Dynamics/2_Data_processing/CPS2.csv",
@@ -27,15 +27,15 @@ function retrieve_data_files()
         )
     elseif pwd()[1:2] == "/U"
         files = Dict(
-            # "SCF" => raw"/Users/lc/Dropbox/Distributional_Dynamics/2_Data_processing/SCF.csv",
+            "SCF" => raw"/Users/lc/Dropbox/Distributional_Dynamics/2_Data_processing/SCF.csv",
             "PSID" => raw"/Users/lc/Dropbox/Distributional_Dynamics/2_Data_processing/PSID.csv",
-            # "CEX_all" => raw"/Users/lc/Dropbox/Distributional_Dynamics/2_Data_processing/CEX_all.csv", # batching all to 4th quarter
+            # "CEX" => raw"/Users/lc/Dropbox/Distributional_Dynamics/2_Data_processing/CEX_all.csv", # batching all to 4th quarter
             # "CEX_all_q" => raw"/Users/lc/Dropbox/Distributional_Dynamics/2_Data_processing/CEX_all_q.csv",
-            # "CEX" => raw"/Users/lc/Dropbox/Distributional_Dynamics/2_Data_processing/CEX.csv",
-            # "CPS" => raw"/Users/lc/Dropbox/Distributional_Dynamics/2_Data_processing/CPS.csv",
-            # "CPS2" => raw"/Users/lc/Dropbox/Distributional_Dynamics/2_Data_processing/CPS2.csv",
-            # "SIPP1" => raw"/Users/lc/Dropbox/Distributional_Dynamics/2_Data_processing/SIPP1.csv",
-            # "SIPP2" => raw"/Users/lc/Dropbox/Distributional_Dynamics/2_Data_processing/SIPP2.csv",
+            "CEX" => raw"/Users/lc/Dropbox/Distributional_Dynamics/2_Data_processing/CEX.csv",
+            "CPS" => raw"/Users/lc/Dropbox/Distributional_Dynamics/2_Data_processing/CPS.csv",
+            "CPS2" => raw"/Users/lc/Dropbox/Distributional_Dynamics/2_Data_processing/CPS2.csv",
+            "SIPP1" => raw"/Users/lc/Dropbox/Distributional_Dynamics/2_Data_processing/SIPP1.csv",
+            "SIPP2" => raw"/Users/lc/Dropbox/Distributional_Dynamics/2_Data_processing/SIPP2.csv",
         )
     else
         # Windows
@@ -170,10 +170,10 @@ end
 
 
 # List of models:
-# " PP CEX_all excluding housing cycle"
-# " PP CEX_all excluding housing cycle short"
-# " PP CEX_all excluding recent 20 quarters"
-# " PP CEX_all every 4 years"
+# " PP CEX excluding housing cycle"
+# " PP CEX excluding housing cycle short"
+# " PP CEX excluding recent 20 quarters"
+# " PP CEX every 4 years"
 
 # " PP SCF"
 # " Γ estimated"
