@@ -97,8 +97,7 @@ function estimate_prior(model_elements::StateSpaceModel, time_p::TimeParams, mod
     end
 
     # Errors
-    n_states = factor_count + agg_count
-    Ω_prior, Σ_prior = set_shock_priors(priors, n_states, n_param)
+    Ω_prior, Σ_prior = set_shock_priors(priors, factor_count, agg_count, n_param)
 
     # Final parameter vector
     param_vector = [A_prior, B_prior, C_prior, D_prior, Ω_prior, Σ_prior]
@@ -472,10 +471,10 @@ function minnesota_prior(minn_params, pcs, controls, lags, estimator)
     end
 
     # V_prior for C
-    VC_prior = zeros(n_aggs, total_state * lags)
+    VC_prior = zeros(n_aggs, n_factors)
     for row in n_factors+1:n_factors+n_aggs
         s = 1
-        for col in 1:(total_state*lags)
+        for col in 1:n_factors*lags
             scaling_factor = var_Ω[row] / var_Ω[col]
             if scaling_factor == 1.0
                 VC_prior[row-n_factors, s:s+lags-1] = [(κ_0 / l^κ_4) for l in 1:lags]
@@ -535,19 +534,23 @@ function hyper_prioreval(par, priors)
 end
 
 
-function prioreval(par, priors)
+function prioreval(par, priors, param_sizes)
     """Evaluates the parameters at their prior distribution.  
 
     p(A, Π) = p(A) * p(Π)
     """
+    nf = param_sizes[1][1]
     σ²_Ω = diag(par[2])
+    σ²_Ωf = σ²_Ω[1:nf]
+    σ²_Ωy = σ²_Ω[nf+1:end]
     σ²_Σ = diag(par[3])
 
     ABCD_cond = all(insupport(priors[1], par[1]))
-    Ω_cond = all([insupport(priors[2], σ²_Ω[i]) for i in eachindex(σ²_Ω)])
-    Σ_cond = all([insupport(priors[2+i], σ²_Σ[i]) for i in eachindex(σ²_Σ)])
+    Ωf_cond = all([insupport(priors[2], σ²_Ωf[i]) for i in eachindex(σ²_Ωf)])
+    Ωy_cond = all([insupport(priors[3], σ²_Ωy[i]) for i in eachindex(σ²_Ωy)])
+    Σ_cond = all([insupport(priors[3+i], σ²_Σ[i]) for i in eachindex(σ²_Σ)])
 
-    if ABCD_cond && Ω_cond && Σ_cond
+    if ABCD_cond && Ωf_cond && Ωy_cond && Σ_cond
         # split covariance matrices into standard deviations and correlation matrices
         log_priorval = 0.0
         alarm = false
@@ -555,8 +558,9 @@ function prioreval(par, priors)
         log_priorval = sum(logpdf(priors[1], par[1]))  # very costly unfortunately
 
         # Compute prior on variances 
-        log_priorval += sum([logpdf(priors[2], σ²_Ω[i]) for i in eachindex(σ²_Ω)])
-        log_priorval += sum([logpdf(priors[2+i], σ²_Σ[i]) for i in eachindex(σ²_Σ)])
+        log_priorval += sum([logpdf(priors[2], σ²_Ωf[i]) for i in eachindex(σ²_Ωf)])
+        log_priorval += sum([logpdf(priors[3], σ²_Ωy[i]) for i in eachindex(σ²_Ωy)])
+        log_priorval += sum([logpdf(priors[3+i], σ²_Σ[i]) for i in eachindex(σ²_Σ)])
 
     else
         # println("not in support")

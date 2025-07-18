@@ -9,20 +9,22 @@
 # The prior on Σ is then the product of a logNormal * DR * logNormal
 # https://stats.stackexchange.com/questions/282380/what-is-the-correct-form-of-metropolis-hasting-step-in-scaled-inverse-wishart-pr 
 
-function set_shock_priors(priors, n_states, n_param)
+function set_shock_priors(priors, factor_count, agg_count, n_param)
 
     # Distributions and draws 
-    local Ω_mode, Σ_mode
+    local Ωf_mode, Ωy_mode, Σ_mode
     try
-        Ω_mode = repeat([StatsBase.mode(priors[2])], n_states)
-        Σ_mode = [StatsBase.mode(priors[2+i]) for i in 1:n_param]
+        Ωf_mode = repeat([StatsBase.mode(priors[2])], factor_count)
+        Ωy_mode = repeat([StatsBase.mode(priors[3])], agg_count)
+        Σ_mode = [StatsBase.mode(priors[3+i]) for i in 1:n_param]
     catch e
-        Ω_mode = repeat([StatsBase.mode(priors[2].untruncated)], n_states)
+        Ωf_mode = repeat([StatsBase.mode(priors[2].untruncated)], factor_count)
+        Ωy_mode = repeat([StatsBase.mode(priors[3].untruncated)], agg_count)
         Σ_mode = [StatsBase.mode(priors[2+i].untruncated) for i in 1:n_param] # For the truncated cauchy
     end
 
     # Replace the last n_aggs entries of Σ_mode to zero
-    Ω_prior = Diagonal(Ω_mode)
+    Ω_prior = Diagonal(vcat(Ωf_mode, Ωy_mode))
     Σ_prior = Diagonal(Σ_mode)
 
     return Ω_prior, Σ_prior

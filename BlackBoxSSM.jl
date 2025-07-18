@@ -22,30 +22,47 @@ function define_step_ranges(param_sizes, priors, param_vector)
     #     step_ranges[i] = (priors[1].μ[i] - priors[1].Σ[i,i], priors[1].μ[i] + priors[1].Σ[i,i]) 
     # end
     # For A 
-    for i in 1:prod(param_sizes[1])
+    l_A = prod(param_sizes[1])
+    l_B = prod(param_sizes[2])
+    l_C = prod(param_sizes[3])
+    l_D = param_sizes[4][1]
+    l_Ωf = param_sizes[1][1]
+    l_Ωy = param_sizes[2][2]
+    l_Σ = param_sizes[6][1]
+
+    for i in 1:l_A
         # step_ranges[i] = (-0.99, 0.99) 
         step_ranges[i] = (priors[1].μ[i] - 10 * priors[1].Σ[i, i], priors[1].μ[i] + 10 * priors[1].Σ[i, i])
     end
 
     # For B
-    for i in (prod(param_sizes[1])+1):(prod(param_sizes[1])+prod(param_sizes[2]))
+    for i in (l_A+1):(l_A+l_B)
+        step_ranges[i] = (priors[1].μ[i] - 10 * priors[1].Σ[i, i], priors[1].μ[i] + 10 * priors[1].Σ[i, i])
+    end
+
+    # For C
+    for i in (l_A+l_B+1):(l_A+l_B+l_C)
         step_ranges[i] = (priors[1].μ[i] - 10 * priors[1].Σ[i, i], priors[1].μ[i] + 10 * priors[1].Σ[i, i])
     end
 
     # For D
-    for i in (prod(param_sizes[1])+prod(param_sizes[2])+1):(prod(param_sizes[1])+prod(param_sizes[2])+param_sizes[3][1])
+    for i in (l_A+l_B+l_C+1):(l_A+l_B+l_C+l_D)
         step_ranges[i] = (priors[1].μ[i] - 10 * priors[1].Σ[i, i], priors[1].μ[i] + 10 * priors[1].Σ[i, i])
     end
 
-    # For Ω
-    A_B_D = length(priors[1].μ)
-    for i in A_B_D+1:A_B_D+param_sizes[4][1]
+    # For Ωf
+    for i in (l_A+l_B+l_C+l_D+1):(l_A+l_B+l_C+l_D+l_Ωf)
         step_ranges[i] = (-10 * priors[2].σ + priors[2].μ, 10 * priors[2].σ + priors[2].μ)
     end
 
+    # For Ωy
+    for i in (l_A+l_B+l_C+l_D+l_Ωf+1):(l_A+l_B+l_C+l_D+l_Ωf+l_Ωy)
+        step_ranges[i] = (-10 * priors[3].σ + priors[3].μ, 10 * priors[3].σ + priors[3].μ)
+    end
+
     # For Σ
-    for (q, i) in enumerate(A_B_D+param_sizes[4][1]+1:A_B_D+param_sizes[4][1]+param_sizes[5][1])
-        step_ranges[i] = (-10 * priors[2+q].σ + priors[2+q].μ, 10 * priors[2+q].σ + priors[2+q].μ)
+    for (q, i) in enumerate((l_A+l_B+l_C+l_D+l_Ωf+l_Ωy+1):(l_A+l_B+l_C+l_D+l_Ωf+l_Ωy+l_Σ))
+        step_ranges[i] = (-10 * priors[3+q].σ + priors[3+q].μ, 10 * priors[3+q].σ + priors[3+q].μ)
     end
 
     return step_ranges
