@@ -1288,6 +1288,7 @@ function pick_grid_for_confidence_intervals(estimator)
 end
 
 
+
 function specify_bootstrap_container(measures, objects, estimator, year_vec, series, source, draws)
     @unpack grid_pcf, grid_cop = estimator
     if typeof(estimator) <: SeriesEstimator
@@ -1612,10 +1613,16 @@ function estimate_confidence_intervals!(data, objects, series, years, time_dict,
                                 coef_boot[cop_rows, count, s] .= remove_immutable(cop_weights)
                             end
                         else
-                            cop_with_imm = get_copulas(b_sample, measures, obs_measures, estimator; with_immutable=true)
-                            cop_mat = reshape(cop_with_imm, cop_size)
-                            sub_boot_dict["copula"][:, s, count] .= undo_copula_treatment(cop_mat, estimator)[:]
-                            coef_boot[cop_rows, count, s] .= remove_immutable(cop_mat)
+                            # cop_with_imm = get_copulas(b_sample, measures, obs_measures, estimator; with_immutable=true)
+                            # cop_mat = reshape(cop_with_imm, cop_size)
+                            # sub_boot_dict["copula"][:, s, count] .= undo_copula_treatment(cop_mat, estimator)[:]
+                            # coef_boot[cop_rows, count, s] .= remove_immutable(cop_mat)
+                            cop_weights = get_copulas(b_sample, measures, obs_measures, estimator; with_immutable=true)
+                            cop_weights = reshape(cop_weights, cop_size)
+
+                            sub_boot_dict["copula"][:, s, count] .= generate_copula_density(cop_weights, XX, id_x, integrals_pre, measures, obs_measures, grid_size_data_cop)[:]
+                            coef_boot[cop_rows, count, s] .= remove_immutable(cop_weights)
+
                         end
                     else
                         cop_with_imm = get_copulas(b_sample, measures, obs_measures, estimator; with_immutable=true)

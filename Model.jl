@@ -197,7 +197,7 @@ function define_parameter_space(model_elements, model_options, prior_objects)
     end
 
     # Remove elements from the vector of priors that we don't want to estimate
-    priors = [priors[1], priors[2], priors[2 .+ cond]...]
+    priors = [priors[1], priors[2], priors[3], priors[3 .+ cond]...]
 
     return [A[:]; B[:]; C[:]; D[:]; Ω[:]; short_Σ[:]], new_param_sizes, Σ_ids, priors # [lb, ub]
 end
@@ -272,16 +272,20 @@ function matrisize(param_vector, param_sizes)
     Ω = zeros(eltype(param_vector), param_sizes[5][1], param_sizes[5][1])
     Σ = zeros(eltype(param_vector), param_sizes[6][1], param_sizes[6][1])
 
+    l_A = length(A)
+    l_B = length(B)
+    l_C = length(C)
+
     # Change parameter space based on :case
-    A .= reshape(view(param_vector, 1:prod(param_sizes[1])), param_sizes[1])
-    B .= reshape(view(param_vector, 1+length(A):length(A)+prod(param_sizes[2])), param_sizes[2])
-    C .= reshape(view(param_vector, length(A)+length(B)+1:length(A)+length(B)+prod(param_sizes[3])), param_sizes[3])
-    D .= diagm(view(param_vector, length(A)+length(B)+prod(param_sizes[3])+1:length(A)+length(B)+prod(param_sizes[3])+param_sizes[4][1]))
-    Ω .= diagm(view(param_vector, length(A)+length(B)+prod(param_sizes[3])+param_sizes[4][1]+1:length(A)+length(B)+prod(param_sizes[3])+param_sizes[4][1]+param_sizes[5][1]))
+    A .= reshape(view(param_vector, 1:l_A), param_sizes[1])
+    B .= reshape(view(param_vector, 1+l_A:l_A+l_B), param_sizes[2])
+    C .= reshape(view(param_vector, 1+l_A+l_B:l_A+l_B+l_C), param_sizes[3])
+    D .= diagm(view(param_vector, 1+l_A+l_B+l_C:l_A+l_B+l_C+param_sizes[4][1]))
+    Ω .= diagm(view(param_vector, 1+l_A+l_B+l_C+param_sizes[4][1]+1:1+l_A+l_B+l_C+param_sizes[4][1]+param_sizes[5][1]))
 
     # Creating Σ, adding zeros for aggregates (perfectly measured)
     # Σ_vec = vcat(view(param_vector, length(A)+length(B)+param_sizes[3][1]+param_sizes[4][1]+1:length(param_vector)), zeros(n_aggs))
-    Σ .= diagm(view(param_vector, length(A)+length(B)+prod(param_sizes[3])+param_sizes[4][1]+param_sizes[5][1]+1:length(param_vector)))
+    Σ .= diagm(view(param_vector, l_A+l_B+l_C+param_sizes[4][1]+param_sizes[5][1]+1:length(param_vector)))
 
     return A, B, C, D, Hermitian(Ω), Hermitian(Σ)  # they need to be positive semi-def. 
 end
@@ -315,7 +319,7 @@ function likeli(model_elements, param_vector, param_sizes, priors, meas_ind, Σ_
     A, B, C, D, Ω, Σ = matrisize(param_vector, param_sizes)
 
     # Reparametization
-    log_P, alarm = prioreval([[A..., B..., C..., diag(D)...], Matrix(Ω), Matrix(Σ)], priors)
+    log_P, alarm = prioreval([[A..., B..., C..., diag(D)...], Matrix(Ω), Matrix(Σ)], priors, param_sizes)
 
     if alarm
         # println("not in support")
@@ -341,12 +345,12 @@ function likeli(model_elements, param_vector, param_sizes, priors, meas_ind, Σ_
     # Filter-smoother estimates
     if smooth
         # Generate likelihood of data and smoother output 
-        smoother_output, log_D, alarm = recurse_kalman_filter(A, B, C, D, Ω_f, Ω_y, Σ, G, y, u, smooth)
+        smoother_output, log_D, alarm = recurse_kalman_filter(A, B, C, D, Ω_f, Ω_y, Σ, G, y, smooth)
         tot_log_like = log_P + log_D         # Total likelihood 
         return smoother_output, tot_log_like, alarm
 
     else
-        log_D, alarm = recurse_kalman_filter(A, B, C, D, Ω_f, Ω_y, Σ, G, y, u, smooth)
+        log_D, alarm = recurse_kalman_filter(A, B, C, D, Ω_f, Ω_y, Σ, G, y, smooth)
         # log_D, alarm         = recurse_kalman_filter(A,B,Ω,VΣ̂V,Ĝ,ŷ,u,smooth)
 
         tot_log_like = log_P + log_D         # Total likelihood 
@@ -356,7 +360,7 @@ function likeli(model_elements, param_vector, param_sizes, priors, meas_ind, Σ_
 end
 
 
-function recurse_kalman_filter(A, B, C, D, Ω_f, Ω_y, Σ, G, y, u, smooth)
+function recurse_kalman_filter(A, B, C, D, Ω_f, Ω_y, Σ, G, y, smooth)
     """Performs kalman filter recursively, performing a filtering step and updating step thereafter.
     Assumption is: measurements are uncorrelated.
 
@@ -365,18 +369,20 @@ function recurse_kalman_filter(A, B, C, D, Ω_f, Ω_y, Σ, G, y, u, smooth)
     """
     # Types for auto-differentiation
     r, q = size(B) # number of factors and controls
-    big_zero = zero(eltype(A), size(A))
-    big_zero_y = zero(eltype(B), size(B))
+    big_zero = zeros(eltype(A), size(A))
+    big_zero_b = zeros(eltype(B), size(B))
+    AI = Matrix{eltype(A)}(I, size(A, 1), size(A, 1))  # Identity matrix of the same type as A
+
 
     L = [A big_zero big_zero big_zero B;
-        I big_zero big_zero big_zero big_zero;
-        big_zero I big_zero big_zero big_zero;
-        big_zero big_zero I big_zero big_zero;
-        C big_zero_y big_zero_y big_zero_y D]               # (r+q) × (r+q)
+        AI big_zero big_zero big_zero big_zero_b;
+        big_zero AI big_zero big_zero big_zero_b;
+        big_zero big_zero AI big_zero big_zero_b;
+        C big_zero_b' big_zero_b' big_zero_b' D]               # (4r+q) × (4r+q)
 
-    big_Ω = blockdiag(Ω_f, big_zero, big_zero, big_zero, Ω_y)
+    big_Ω = cat([Ω_f, big_zero, big_zero, big_zero, Ω_y]..., dims=(1, 2))
 
-    nₛ = size(L, 1)  # number of states
+    nₛ = size(big_Ω, 1)  # number of states
 
     # Data + Parameters 
     T = size(y, 2)
@@ -390,7 +396,31 @@ function recurse_kalman_filter(A, B, C, D, Ω_f, Ω_y, Σ, G, y, u, smooth)
     # P_F = lyapd(A, Ω)
     # P_F = lyapd(A, B * B' + Ω) # Assumes covariances are zero or small, cov(u; dims=2) = 1
     # P_F = lyapd(A, B * B' + A * C_FY * B' + B * C_FY' * A' + Ω)
-    P_F = lyapd(L, big_Ω)                    # solves  P = L P L' + Q
+    # P_F = lyapd(L, big_Ω)                    # solves  P = L P L' + Q
+
+    ixF = 1:r
+    # ixF1 = r+1:2r
+    # ixF2 = 2r+1:3r
+    # ixF3 = 3r+1:4r
+    ixU = 4r+1:4r+q
+
+    # Solve for core
+    Lcore = [A B; C D]
+    Qcore = zeros(eltype(A), r + q, r + q)
+    Qcore[1:r, 1:r] = Ω_f
+    Qcore[r+1:end, r+1:end] = Ω_y
+    Pcore = lyapd(Lcore, Qcore)
+
+    # Build big P0
+    P_F = zeros(eltype(A), 4r + q, 4r + q)
+
+    # current F_t and u_t blocks
+    P_F[ixF, ixF] = Pcore[1:r, 1:r]
+    P_F[ixU, ixU] = Pcore[r+1:end, r+1:end]
+    P_F[ixF, ixU] = Pcore[1:r, r+1:end]
+    P_F[ixU, ixF] = Pcore[r+1:end, 1:r]
+
+    # P_F[diagind(P_F)[r+1:4r]] .= 0 # value doesnt matter
 
     # Filtered containers  
     x_filtered = zeros(eltype(A), nₛ, T)
@@ -490,10 +520,6 @@ function apply_measurement_criteria(Σ, Σ_ids, model_options, agg_count)
     dimension = length(measures)
 
     cop_part, imm_part = retrieve_cop_and_imm_part(estimator, dimension)
-    pcf_part = grid_pcf * dimension
-    noisy_meas = number_of_dfs * (cop_part + pcf_part - imm_part)
-
-    noisy_meas = cop_part + pcf_part - imm_part
     variances = []
 
     cop_part, imm_part = retrieve_cop_and_imm_part(estimator, dimension)
@@ -1140,6 +1166,7 @@ function sequential_kalman_update!(x_updated, sigma_updated, Y_u, t, G_u, x̂_F,
             try
                 log_c += (log(2π).+log(p)+(e*e).*inv(p))[1] * -0.5  # white noise case. # this is the likelihood contribution of 1 time period, given factors and θ
             catch ee
+                println("Error in log_c: ", ee)
                 log_c += -1.e12
             end
         end
