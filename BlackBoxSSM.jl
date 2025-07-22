@@ -1,6 +1,6 @@
 function run_black_box_opt(SSM, param_vector, param_sizes, priors, measures)
     step_ranges = define_step_ranges(param_sizes, priors, param_vector)
-    opttime = param_sizes[1][1] * 100
+    opttime = length(param_vector) * 7
     res = bboptimize(SSM, param_vector; SearchRange=step_ranges, Method=:adaptive_de_rand_1_bin_radiuslimited, MaxTime=opttime, TraceMode=:compact, TraceInterval=60)
     return best_candidate(res)
 end
@@ -32,37 +32,41 @@ function define_step_ranges(param_sizes, priors, param_vector)
 
     for i in 1:l_A
         # step_ranges[i] = (-0.99, 0.99) 
-        step_ranges[i] = (priors[1].μ[i] - 10 * priors[1].Σ[i, i], priors[1].μ[i] + 10 * priors[1].Σ[i, i])
+        σ_a = priors[1].Σ[i, i]
+        step_ranges[i] = (priors[1].μ[i] - 3 * σ_a, priors[1].μ[i] + 3 * σ_a)
     end
 
     # For B
     for i in (l_A+1):(l_A+l_B)
-        step_ranges[i] = (priors[1].μ[i] - 10 * priors[1].Σ[i, i], priors[1].μ[i] + 10 * priors[1].Σ[i, i])
+        σ_b = priors[1].Σ[i, i]
+        step_ranges[i] = (priors[1].μ[i] - 3 * σ_b, priors[1].μ[i] + 3 * σ_b)
     end
 
     # For C
     for i in (l_A+l_B+1):(l_A+l_B+l_C)
-        step_ranges[i] = (priors[1].μ[i] - 10 * priors[1].Σ[i, i], priors[1].μ[i] + 10 * priors[1].Σ[i, i])
+        σ_c = priors[1].Σ[i, i]
+        step_ranges[i] = (priors[1].μ[i] - 3 * σ_c, priors[1].μ[i] + 3 * σ_c)
     end
 
     # For D
     for i in (l_A+l_B+l_C+1):(l_A+l_B+l_C+l_D)
-        step_ranges[i] = (priors[1].μ[i] - 10 * priors[1].Σ[i, i], priors[1].μ[i] + 10 * priors[1].Σ[i, i])
+        σ_d = priors[1].Σ[i, i]
+        step_ranges[i] = (priors[1].μ[i] - 3 * σ_d, priors[1].μ[i] + 3 * σ_d)
     end
 
     # For Ωf
     for i in (l_A+l_B+l_C+l_D+1):(l_A+l_B+l_C+l_D+l_Ωf)
-        step_ranges[i] = (-10 * priors[2].σ + priors[2].μ, 10 * priors[2].σ + priors[2].μ)
+        step_ranges[i] = (-3 * priors[2].σ + priors[2].μ, 3 * priors[2].σ + priors[2].μ)
     end
 
     # For Ωy
     for i in (l_A+l_B+l_C+l_D+l_Ωf+1):(l_A+l_B+l_C+l_D+l_Ωf+l_Ωy)
-        step_ranges[i] = (-10 * priors[3].σ + priors[3].μ, 10 * priors[3].σ + priors[3].μ)
+        step_ranges[i] = (-3 * priors[3].σ + priors[3].μ, 3 * priors[3].σ + priors[3].μ)
     end
 
     # For Σ
     for (q, i) in enumerate((l_A+l_B+l_C+l_D+l_Ωf+l_Ωy+1):(l_A+l_B+l_C+l_D+l_Ωf+l_Ωy+l_Σ))
-        step_ranges[i] = (-10 * priors[3+q].σ + priors[3+q].μ, 10 * priors[3+q].σ + priors[3+q].μ)
+        step_ranges[i] = (-3 * priors[3+q].σ + priors[3+q].μ, 3 * priors[3+q].σ + priors[3+q].μ)
     end
 
     return step_ranges
