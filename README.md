@@ -206,37 +206,32 @@ The MCMC sampler uses Julia's default random number generator. For exact replica
 
 ### Main Text
 
-| Exhibit | Description | Source Code | Output Path |
-|---------|-------------|-------------|-------------|
-| Figure 1 | Estimation workflow | TikZ (in main.tex) | N/A (diagram) |
-| Figure 2 | Legendre coefficients | `AllPlots.jl`: `gen_proof_of_concept_copulas()` | `Plots/proof_of_concept/Legendre_coefs_*.pdf` |
-| Figure 3 | Copula observational weights | `Correlations.jl` | `Plots/proof_of_concept/copula_weight_*.pdf` |
-| Figure 4 | Geometric representation | TikZ (in main.tex) | N/A (diagram) |
-| Figure 5 | Quantile function comparison | `AllPlots.jl`: `gen_proof_of_concept_figure()` | `Plots/proof_of_concept/*_quantiles_*.pdf` |
-| Figure 6 | KL divergence | `AllPlots.jl`: `gen_proof_of_concept_copulas()` | `Plots/proof_of_concept/KL_divergence_*.pdf` |
-| Figure 7 | Out-of-sample predictability (baseline) | `ForecastSSM.jl`: `perform_forecast()` | `7_Results/.../forecasts/extensive/*.pdf` |
-| Figure 8 | Out-of-sample predictability (re-estimated) | `CounterfactualRuns.jl` | `7_Results/.../quantiles_levels/*.pdf` |
-| Figure 9 | HANK model comparison | `plot_HANK.jl`: `generate_quantiles_shares_levels_HANK()` | `Plots/HANK/*.pdf` |
-| Figure 10 | Consumption dynamics across recessions | `CyclicalityOfConsumption2.jl`: `generate_relative_to_peak_plots()` | `Plots/consumption_plots/*.jpg` |
-| Figure 11 | Consumption over business cycles | `ginis_and_consumption_trends.do` | `Plots/IRFs_and_Trends/*.pdf` |
-| Table 1 | Data coverage | Manual | `Tables/DataCoverage.tex` |
-| Table 2 | HANK average correlations | `CorrelationTables.jl` | Inline in main.tex |
-| Table 3 | FEVD on distributional factors | `FEVD.jl`: `fevd_dist_vs_agg()` | Inline in main.tex |
-| Table 4 | FEVD of group means | `FEVD.jl`: `fevd_dist_vs_agg()` | Inline in main.tex |
-
-### Appendix
-
-| Exhibit | Description | Source Code |
-|---------|-------------|-------------|
-| Appendix A | Local linear approximation | Analytical (no code) |
-| Appendix B | Marginal data density | `MDD.jl` |
-| Appendix C | Minnesota prior | `SelectPrior.jl` |
-| Appendix D | Bayesian convergence | `MCMC.jl`: `run_diagnostics()` |
-| Appendix E | Reconstructing estimates | `Reconstruction.jl`, `CreateTimeSeries.jl` |
-| Appendix F | Hyperparameter validation | `HyperparameterOptimization.jl` |
-| Appendix G | External validation | `Validation.jl`: `compare_to_external_sources()` |
-| Appendix H | Data description | `data_cleaning.do` |
-| Appendix I | Correlations | `Correlations.jl`, `CorrelationTables.jl` |
+| Exhibit | Source Code |
+|---------|-------------|
+| Figure 1 | TikZ (in main.tex) |
+| Figure 2 | `SeriesEstimators.jl` |
+| Figure 3 | TikZ (in main.tex) |
+| Figure 4 | `AllPlots.jl`: `gen_proof_of_concept_*()` |
+| Figure 5 | `AllPlots.jl`: `gen_proof_of_concept_*()` |
+| Figure 6 | `ForecastSSM.jl` |
+| Figure 7 | `CreateTimeSeries.jl`: `generate_specific_plots()` |
+| Figure 8 | `plot_HANK.jl` |
+| Figure 9 | Stata (TBD) |
+| Figure 10 | `OrderAnalysis.jl` |
+| Figure 11 | `OrderAnalysis.jl` |
+| Figure 12 | `OrderAnalysis.jl` |
+| Figure 13 | `DIMESampler.jl` |
+| Figure 14 | `CreateTimeSeries.jl` |
+| Figure 15 | `Validation.jl` |
+| Table 1 | `.tex` (manual) |
+| Table 2 | TBD |
+| Table 3 | `FEVD.jl` |
+| Table 4 | `FEVD.jl` |
+| Table 5 | `MDD.jl` |
+| Table 6 | TBD |
+| Table 7 | TBD |
+| Table 8 | TBD |
+| Table 9 | TBD |
 
 ## References
 
