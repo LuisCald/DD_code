@@ -235,7 +235,7 @@ The MCMC sampler uses Julia's default random number generator. For exact replica
 
 ## References
 
-Bayer, Christian, Luis Calderon, and Moritz Kuhn. "Distributional Dynamics." *Econometrica*, forthcoming.
+Bayer, Christian, Luis Calderon, and Moritz Kuhn. "Distributional Dynamics." CEPR Discussion Paper 19829, 2025.
 
 Board of Governors of the Federal Reserve System. *Survey of Consumer Finances*. Various years (1962-2022). https://www.federalreserve.gov/econres/scfindex.htm.
 
