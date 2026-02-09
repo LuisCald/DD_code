@@ -194,7 +194,7 @@ function generate_quantiles_shares_levels_HANK(data_dict, ty, func_data, data_na
                 # )
 
                 # Find the variable from truth_df, and then scale it
-                q_tag = "" #integral_pcf_grid == 5 ? "q" : integral_pcf_grid == 10 ? "" : integral_pcf_grid == 20 ? "v" : "unknown"
+                q_tag = integral_pcf_grid == 5 ? "q" : integral_pcf_grid == 10 ? "" : integral_pcf_grid == 20 ? "v" : "unknown"
                 truth_var_name = Symbol(meas * "$(j)" * q_tag)
                 # meas_name = meas == "consum" ? "consumption" : meas
                 avg_name = Symbol(meas * "_per_hh")
