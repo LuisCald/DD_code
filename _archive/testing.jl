@@ -16,7 +16,7 @@ truth_vec = truth_mode == :none ? nothing : out[3]
 
 # Settings
 save_filtered = true
-dt_id = 1
+dt_id = 10
 
 @assert truth_vec !== nothing "Need truth_mode != :none to use truth moments in this script."
 
@@ -172,23 +172,23 @@ end
 # Combine quintiles (n=5) with means (X_per_hh) for convenience.
 truth_df1 = truth_means_wide(truth_df)
 truth_wide_5 = leftjoin(truth_quintiles_wide(truth_df), truth_df1; on=:time)
-if save_filtered
-    out_dir = joinpath(@__DIR__, "bld", "filtered")
-    mkpath(out_dir)
+# if save_filtered
+#     out_dir = joinpath("/Users/lc/Dropbox/Distributional_Dynamics/5_Code/bld/", "testing")
+#     mkpath(out_dir)
 
-    # Export wide truth for each index/chunk in `truth_vec`.
-    # (This avoids re-running the simulation just to save all chunks.)
-    if truth_vec === nothing
-        CSV.write(joinpath(out_dir, "truth_data_$(dt_id).csv"), truth_wide_5)
-    else
-        for idx in eachindex(truth_vec)
-            tdf = truth_vec[idx]
-            tdf1 = truth_means_wide(tdf)
-            wide5 = leftjoin(truth_quintiles_wide(tdf), tdf1; on=:time)
-            CSV.write(joinpath(out_dir, "truth_data_$(idx).csv"), wide5)
-        end
-    end
-end
+#     # Export wide truth for each index/chunk in `truth_vec`.
+#     # (This avoids re-running the simulation just to save all chunks.)
+#     if truth_vec === nothing
+#         CSV.write(joinpath(out_dir, "truth_data_$(dt_id).csv"), truth_wide_5)
+#     else
+#         for idx in eachindex(truth_vec)
+#             tdf = truth_vec[idx]
+#             tdf1 = truth_means_wide(tdf)
+#             wide5 = leftjoin(truth_quintiles_wide(tdf), tdf1; on=:time)
+#             CSV.write(joinpath(out_dir, "truth_data_$(idx).csv"), wide5)
+#         end
+#     end
+# end
 
 # Optional transform for plotting/exporting moments.
 # - :none  -> plot levels
