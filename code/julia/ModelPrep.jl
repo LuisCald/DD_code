@@ -1441,7 +1441,7 @@ function perform_pca(pool, measures, type, tag; additional_data_blocks=false, be
 
         M = MultivariateStats.fit(PCA, pool; pratio=0.95, method=:svd, mean=0)  # TODO: unfix this!
         pcs = MultivariateStats.transform(M, pool)
-        Mdim = tag == " less AF" ? 3 : tag == " more AF" ? 15 : tag == " all AF" ? 30 : tag == " less DF and AF" ? 3 : 11
+        Mdim = tag == " less AF" ? 3 : tag == " more AF" ? 15 : tag == " all AF" ? 30 : tag == " less DF and AF" ? 3 : occursin("HANK", tag) ? 9 : 11
 
         λ = sqrt.(principalvars(M))
         pcs_s = pcs ./ λ
@@ -1617,30 +1617,31 @@ function select_aggregates(aggregates, measures, tot_periods, tmin, tmax, agg_la
     # Fill matrix with density, percentile function measurements 
     data_only_aggs = copy(transpose(Matrix{Float64}(data_only_aggs)))  # removes date column, K x T
 
-    # if tag == " HANK"
-    #     agg_pcs = data_only_aggs[:, 1:end-agg_lags-dropped_rows_ub]
-    #     agg_count = size(agg_pcs, 1)
-    #     u_proj = zeros(size(data_only_aggs, 1), size(agg_pcs, 1)) # doesnt matter
-    #     @info "For HANK, we keep $agg_count aggregate series."
+    if occursin("HANK", tag)
+        # HANK: shocks are independent AR(1)s, lags are redundant — use contemporaneous only
+        super_aggs = data_only_aggs[:, 1:end-agg_lags]
+        standardize_aggs!(super_aggs)
 
-    #     return u_proj, agg_pcs, agg_count
-    # else
-    super_aggs = data_only_aggs[:, 1:end-agg_lags] # N by T
+        u_proj, agg_pcs, _ = perform_pca(super_aggs, measures, :aggs, tag; best_aggs=best_aggs)
 
-    for i in 1:agg_lags
-        super_aggs = vcat(super_aggs, data_only_aggs[:, i+1:end-agg_lags+i])
+        agg_pcs = agg_pcs[:, 1:end-dropped_rows_ub]
+        agg_count = size(agg_pcs, 1)
+        return u_proj, agg_pcs, agg_count
+    else
+        super_aggs = data_only_aggs[:, 1:end-agg_lags] # N by T
+
+        for i in 1:agg_lags
+            super_aggs = vcat(super_aggs, data_only_aggs[:, i+1:end-agg_lags+i])
+        end
+
+        standardize_aggs!(super_aggs)
+
+        u_proj, agg_pcs, _ = perform_pca(super_aggs, measures, :aggs, tag; best_aggs=best_aggs)
+
+        agg_pcs = agg_pcs[:, 1:end-dropped_rows_ub]
+        agg_count = size(agg_pcs, 1)
+        return u_proj, agg_pcs, agg_count
     end
-
-    standardize_aggs!(super_aggs)
-
-    u_proj, agg_pcs, _ = perform_pca(super_aggs, measures, :aggs, tag; best_aggs=best_aggs)  # time must go over the column dimension
-
-    # subset agg_pcs 
-    agg_pcs = agg_pcs[:, 1:end-dropped_rows_ub]
-    agg_count = size(agg_pcs, 1)
-
-    return u_proj, agg_pcs, agg_count
-    # end
 end
 
 # function impose_stationarity(aggregates)

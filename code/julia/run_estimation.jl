@@ -30,7 +30,7 @@ const (param_vector, param_sizes, priors, meas_ind, Σ_ids) = set_params(model_e
 @info "Parameters set. Dimension: $(length(param_vector))"
 
 # ── Step 3: Run DIME sampler (black-box opt + MCMC) ───────────
-niter = 800
+niter = 400
 @info "Starting DIME sampler with $niter iterations..."
 par_final = run_DIME_sampler(model_elements, niter, param_vector, param_sizes, priors, meas_ind, Σ_ids, model_options)
 @info "Estimation complete."
