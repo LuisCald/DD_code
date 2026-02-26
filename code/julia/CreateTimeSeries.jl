@@ -1725,6 +1725,13 @@ function export_functional_data(data_vector, ty, data_name, type, obs_data, func
             end
         end
 
+        # Share-group integration: bot50/mid40/top10
+        share_spec = [0.5, 0.4, 0.1]
+        share_intervals = vcat([0.0 + 1e-6], cumsum(share_spec)[1:end-1], [1.0 - 1e-6])
+        share_data_pcf = [zeros(length(share_spec), T) for _ in 1:D]
+        corr_mat = Matrix(select_series[:, correction_names])
+        integrate_quantile_functions!(share_data_pcf, split_pcfs, grid_pcf, share_intervals, corr_mat)
+
         data_pcf = vcat([new_data_pcf[m] for m in eachindex(new_data_pcf)]...)
         copulas = generate_copula_densities(copulas, measures, integral_cop_grid)
 
@@ -1776,6 +1783,16 @@ function export_functional_data(data_vector, ty, data_name, type, obs_data, func
 
     # Place data in a dictionary for time series plotting
     data_dict = create_time_series_dictionary([copulas, data_pcf, levels, shares], estimator, measures)
+
+    # Inject share-group means (bot50/mid40/top10) into the dictionary
+    if typeof(estimator) <: SeriesEstimator && @isdefined(share_data_pcf)
+        share_labels = ["bot50", "mid40", "top10"]
+        for (i, meas) in enumerate(sort(measures))
+            for (si, sl) in enumerate(share_labels)
+                data_dict[meas]["quantiles"]["common series"][sl] = share_data_pcf[i][si, :]
+            end
+        end
+    end
 
     # Everything has been reconstructed now. Creating a new select_series object, which has the averages that correspond to the data estimates 
     # To do this, generate total levels and divide the number of households  

@@ -23,41 +23,24 @@ GLOBAL_ECON = "1"
 # File of Structures 
 function retrieve_data_files()
     local files::Dict
-
-
     base_path = DATA_PROCESSING * "/"
 
-    if Sys.islinux()
-        files = Dict(
-            # "HANK full $(GLOBAL_ECON)" => joinpath(base_path, "HANK_full_economy_$(GLOBAL_ECON).csv"),
+    files = Dict(
+        "HANK a $(GLOBAL_ECON)" => joinpath(base_path, "HANK_PSID_$(GLOBAL_ECON).csv"),
+        "HANK b $(GLOBAL_ECON)" => joinpath(base_path, "HANK_CPS_$(GLOBAL_ECON).csv"),
+        "HANK c $(GLOBAL_ECON)" => joinpath(base_path, "HANK_CEX_$(GLOBAL_ECON).csv"),
+        "HANK d $(GLOBAL_ECON)" => joinpath(base_path, "HANK_SCF_$(GLOBAL_ECON).csv"),
+    )
 
-            "HANK a $(GLOBAL_ECON)" => joinpath(base_path, "HANK_PSID_$(GLOBAL_ECON).csv"),
-            "HANK b $(GLOBAL_ECON)" => joinpath(base_path, "HANK_CPS_$(GLOBAL_ECON).csv"),
-            "HANK c $(GLOBAL_ECON)" => joinpath(base_path, "HANK_CEX_$(GLOBAL_ECON).csv"),
-            "HANK d $(GLOBAL_ECON)" => joinpath(base_path, "HANK_SCF_$(GLOBAL_ECON).csv"),
-            # "HANK e $(GLOBAL_ECON)" => joinpath(base_path, "HANK_SIPP_$(GLOBAL_ECON).csv"),
-        )
-    elseif Sys.isapple()
-        files = Dict(
-            # "HANK full 1" => joinpath(base_path, "HANK_full_economy_1.csv"),
+    # "PSID" => joinpath(base_path, "PSID.csv"),
+    # # "CEX" => joinpath(base_path, "CEX_all.csv"), # batching all to 4th quarter
+    # # "CEX_all_q" => joinpath(base_path, "CEX_all_q.csv"),
+    # # "CEX" => joinpath(base_path, "CEX.csv"),
+    # # "CPS" => joinpath(base_path, "CPS.csv"),
+    # # "CPS2" => joinpath(base_path, "CPS2.csv"),
+    # # "SIPP1" => joinpath(base_path, "SIPP1.csv"),
+    # # "SIPP2" => joinpath(base_path, "SIPP2.csv"),
 
-            "PSID" => joinpath(base_path, "PSID.csv"),
-            # "CEX" => joinpath(base_path, "CEX_all.csv"), # batching all to 4th quarter
-            # "CEX_all_q" => joinpath(base_path, "CEX_all_q.csv"),
-            # "CEX" => joinpath(base_path, "CEX.csv"),
-            # "CPS" => joinpath(base_path, "CPS.csv"),
-            # "CPS2" => joinpath(base_path, "CPS2.csv"),
-            # "SIPP1" => joinpath(base_path, "SIPP1.csv"),
-            # "SIPP2" => joinpath(base_path, "SIPP2.csv"),
-        )
-    else
-        # Windows
-        files = Dict(
-            # "SCF" => joinpath(base_path, "SCF.XLSX"),
-            "CEX" => joinpath(base_path, "CEX.csv"),
-            "PSID" => joinpath(base_path, "PSID.csv"),
-        )
-    end
     return files
 end
 
@@ -65,26 +48,11 @@ end
 function retrieve_aggregate_data(sheet)
     local aggregate_data::DataFrame
     base_path = DATA_PROCESSING * "/"
-
-    if Sys.islinux()
-        try
-            aggregate_data = DataFrame(XLSX.readtable(joinpath(base_path, "HANK_shocks_economy_$(GLOBAL_ECON).xlsx"), sheet, header=true,))
-        catch e
-            # Read as .csv if .xlsx fails
-            aggregate_data = CSV.read(joinpath(base_path, "HANK_shocks_economy_$(GLOBAL_ECON).csv"), DataFrame)
-        end
-    elseif Sys.isapple()
-        try
-            aggregate_data = DataFrame(XLSX.readtable(joinpath(base_path, "aggregates_HHs_NPs.XLSX"), sheet, header=true,))
-            # aggregate_data = DataFrame(XLSX.readtable(joinpath(base_path, "HANK_shocks_economy_1.xlsx"), sheet, header=true,))
-        catch e
-            # Read as .csv if .xlsx fails
-            aggregate_data = CSV.read(joinpath(base_path, "HANK_shocks_economy_1.csv"), DataFrame)
-        end
-    else
-        aggregate_data = DataFrame(XLSX.readtable(joinpath(base_path, "aggregates_HHs_NPs.XLSX"), sheet, header=true,))
-    end
-
+    
+    # Read as .csv if .xlsx fails
+    aggregate_data = CSV.read(joinpath(base_path, "HANK_shocks_economy_$(GLOBAL_ECON).csv"), DataFrame)
+    # aggregate_data = DataFrame(XLSX.readtable(joinpath(base_path, "aggregates_HHs_NPs.XLSX"), sheet, header=true,))
+    
     return aggregate_data
 
 end
@@ -94,30 +62,9 @@ function retrieve_rgdp()
     local aggregate_data
     base_path = DATA_PROCESSING * "/"
 
-    if Sys.islinux()
-        try
-            aggregate_data = DataFrame(XLSX.readtable(joinpath(base_path, "HANK_correction_series_$(GLOBAL_ECON).xlsx"), "HANK_correction_series", header=true,))
-        catch e
-            # Read as .csv if .xlsx fails
-            aggregate_data = CSV.read(joinpath(base_path, "truth_data_$(GLOBAL_ECON).csv"), DataFrame)
-        end
-    elseif Sys.isapple()
-        try
-            aggregate_data = DataFrame(XLSX.readtable(joinpath(base_path, "inflation_corrected_correction_series.XLSX"), "data", header=true,))
-            # aggregate_data = DataFrame(XLSX.readtable(joinpath(base_path, "HANK_correction_series_1.xlsx"), "HANK_correction_series", header=true,))
-        catch e
-            # Read as .csv if .xlsx fails
-            aggregate_data = CSV.read(joinpath(base_path, "HANK_correction_series_1.csv"), DataFrame)
-        end
-    else
-        aggregate_data = DataFrame(XLSX.readtable(joinpath(base_path, "inflation_corrected_correction_series.XLSX"), "data", header=true,))
-    end
-    # Replace "consumption" in names with "consum"
-    for col in names(aggregate_data)
-        if occursin("consumption", col)
-            rename!(aggregate_data, col => replace(col, "consumption" => "consum"))
-        end
-    end
+    # aggregate_data = DataFrame(XLSX.readtable(joinpath(base_path, "inflation_corrected_correction_series.XLSX"), "data", header=true,))
+    aggregate_data = CSV.read(joinpath(base_path, "HANK_truth_$(GLOBAL_ECON).csv"), DataFrame)
+
     return aggregate_data
 end
 
@@ -182,9 +129,7 @@ struct FakeKernelEstimator <: FakeEstimator end # for confidence_intervals
 @with_kw mutable struct ModelOptions{AE<:AbstractEstimator,AP<:AbstractPrior,B<:Bool,S<:String,I<:Integer,VS<:Vector{String},D<:Dict,DS<:Dict{String,String}} #,
     estimator::AE = SeriesEstimator(grid_pcf=11 + 1, grid_cop=11 + 1, integral_pcf_grid=5, integral_cop_grid=5) # 11 + 1 = order 11
     # estimator::AE = SeriesEstimator(grid_pcf=11 + 1, grid_cop=11 + 1, integral_pcf_grid=10, integral_cop_grid=10) # or "KDE" or "series" ,     
-    # prior::AP                   = Minnesota(hyperparameters = [0.2, 0.3, .001, 5, 2.0, 0.9])
     prior::AP = Minnesota(hyperparameters=[0.05, 0.1, 0.5, 0.1, 2.0, 0.9, 0.9]) # We use: 1,2,4,6
-    # measures::VS = sort(["liquid", "illiqd", "income"])
     measures::VS = sort(["consum", "wealth", "income"])
     number_of_dfs::I = 4
     plot_proof::B = false # to plot the proof of concept

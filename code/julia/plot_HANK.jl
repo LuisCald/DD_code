@@ -46,7 +46,7 @@ function generate_quantiles_shares_levels_HANK(data_dict, ty, func_data, data_na
     # file_name_raw_data = "/home/luisc/Distributional_Dynamics/7_Results/illiqd_and_income_and_liquid HANK full $(economy_number)/from_mcmc/data/HANK_full_$(economy_number).jld2"
     # func_dict_full_hank = jldopen(file_name_raw_data, "r")["data"]
     # Import truth
-    truth_file = DATA_PROCESSING * "/truth_data_$(economy_number).csv"
+    truth_file = DATA_PROCESSING * "/HANK_truth_$(economy_number).csv"
     truth_data = CSV.read(truth_file, DataFrame)
 
     # # Find the bounds of each 
@@ -103,9 +103,9 @@ function generate_quantiles_shares_levels_HANK(data_dict, ty, func_data, data_na
     #     within_stat_dict["copula"] = compute_copula_within_stat(data_dict, confidence_intervals, base_jump, end_jump, data_name, dimension, grid_choice_cop)
     # end
 
-    println("select_series size: ", size(select_series))
-    println("select_series content: ", select_series[base_jump:end-end_jump, :])
-    println("base_jump: ", base_jump, " end_jump: ", end_jump)
+    # println("select_series size: ", size(select_series))
+    # println("select_series content: ", select_series[base_jump:end-end_jump, :])
+    # println("base_jump: ", base_jump, " end_jump: ", end_jump)
 
 
     for meas in obs_meas # TODO: this issue here is that not all measures are observed ... ofc, we can use the reconstructed data but not the confidence intervals
@@ -271,6 +271,105 @@ function generate_quantiles_shares_levels_HANK(data_dict, ty, func_data, data_na
                 Plots.plot!([], [], ls=:dot, lc=:black, la=0.0, label=L"\textrm{Corr. to\,\, Linear-Int. Data: %$(corr_d)\%}",)
                 Plots.savefig(path * "$meas/" * "quantiles_levels/" * plot_name * "_$meas" * "_$obj" * "_quantiles_$(j)" * detrended_or_not * label * ".pdf")
             end
+        end
+
+        # --- Share-group comparison: bot50, mid40, top10 (relative to mean) ---
+        share_labels = ["bot50", "mid40", "top10"]
+        share_plot_titles = [L"\textrm{Bottom\,\, 50\%}", L"\textrm{Middle\,\, 40\%}", L"\textrm{Top\,\, 10\%}"]
+
+        for (si, sl) in enumerate(share_labels)
+            # Model reconstruction
+            if !haskey(data_dict[meas]["quantiles"]["common series"], sl)
+                continue
+            end
+            model_share = data_dict[meas]["quantiles"]["common series"][sl][base_jump:end-end_jump] ./ select_series[base_jump:end-end_jump, meas*"_per_hh"]
+
+            # Truth
+            truth_col = Symbol(meas * "_" * sl)
+            if !hasproperty(truth_data_filtered, truth_col)
+                @warn "Truth column $truth_col not found, skipping share-group plot for $meas $sl"
+                continue
+            end
+            truth_share = truth_data_filtered[:, truth_col] ./ select_series[base_jump:end-end_jump, meas*"_per_hh"]
+
+            # Observed data (from func_dict)
+            obs_share = nothing
+            if haskey(func_dict[data_name][meas]["quantiles"]["common series"], sl)
+                raw = func_dict[data_name][meas]["quantiles"]["common series"][sl]
+                obs_share = raw[base_jump:end-end_jump] ./ select_series[base_jump:end-end_jump, meas*"_per_hh"]
+            end
+
+            # Non-NaN range
+            s_axis = xaxis
+            est_ids = 1:length(dts)
+
+            # Plot: red = model reconstruction
+            Plots.plot()
+            Plots.plot!(s_axis,
+                model_share[est_ids],
+                ylabel=L"\textrm{%$(M)\, \, rel.\,  to\,\,  average}",
+                title=share_plot_titles[si],
+                lc=:red,
+                xformatter=:latex,
+                yformatter=:latex,
+                xtickfontsize=14,
+                ytickfontsize=14,
+                legendfontsize=10,
+                guidefontsize=14,
+                legend=:best,
+                label="",
+                lw=4, dpi=500, ls=:solid,
+            )
+
+            # Blue dotted = truth
+            Plots.plot!(s_axis,
+                truth_share[est_ids],
+                lc=:blue,
+                lw=4,
+                la=0.5,
+                xtickfontsize=14,
+                ytickfontsize=14,
+                legendfontsize=10,
+                guidefontsize=14,
+                dpi=500, ls=:dot,
+                label=""
+            )
+
+            # Correlation to truth
+            valid = findall(i -> !isnan(model_share[i]) && !isnan(truth_share[i]), est_ids)
+            corr_n = length(valid) > 2 ? round(cor(model_share[valid], truth_share[valid]) * 100, digits=0) : NaN
+
+            # Observed data: black scatter + dashed interpolation
+            if obs_share !== nothing
+                obs_cond = findall(!isnan, obs_share)
+                if !isempty(obs_cond)
+                    Plots.scatter!(xaxis[obs_cond],
+                        obs_share[obs_cond],
+                        marker=:utriangle,
+                        markercolor=:black,
+                        ms=5,
+                        la=0.5,
+                        lw=2, dpi=500,
+                        label=""
+                    )
+                    Plots.plot!(xaxis[obs_cond],
+                        obs_share[obs_cond],
+                        la=0.5,
+                        lw=2, dpi=500,
+                        label="",
+                        ls=:dash
+                    )
+
+                    # Correlation to linear-interpolated data
+                    data_interp = interp1_linear(xaxis[obs_cond], obs_share[obs_cond], Float64.(s_axis))
+                    valid_d = findall(i -> !isnan(model_share[i]) && !isnan(data_interp[i]), est_ids)
+                    corr_d = length(valid_d) > 2 ? round(cor(model_share[valid_d], data_interp[valid_d]) * 100, digits=0) : NaN
+                    Plots.plot!([], [], ls=:dot, lc=:black, la=0.0, label=L"\textrm{Corr. to\,\, Linear-Int. Data: %$(corr_d)\%}",)
+                end
+            end
+
+            Plots.plot!([], [], ls=:dot, lc=:black, la=0.0, label=L"\textrm{Corr. to\,\, Truth: %$(corr_n)\%}",)
+            Plots.savefig(path * "$meas/" * "quantiles_levels/" * plot_name * "_$meas" * "_share_$(sl)" * detrended_or_not * label * ".pdf")
         end
     end
 

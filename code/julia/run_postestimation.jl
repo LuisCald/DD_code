@@ -48,7 +48,7 @@ user_t = (deepcopy(tmin), deepcopy(tmax))
 
 # ── Step 2: Load estimated parameters ────────────────────────
 @info "Loading estimated parameters..."
-par_final = get_param_vector(measures, kind_of_plots, label, data_cutoffs, tag)
+# par_final = get_param_vector(measures, kind_of_plots, label, data_cutoffs, tag)
 logV, alarm = likeli(model_elements, par_final, param_sizes, hyperpriors, Σ_ids, model_options)
 @info "Log-likelihood at loaded parameters: $logV"
 
@@ -61,6 +61,7 @@ dv, _ = reconstruct_data(
 
 # ── Step 4: Export time series, validate, generate figures ───
 @info "Exporting time series and generating validation plots..."
+include("plot_HANK.jl")
 within_stat_dict = Dict()
 for (c, k) in enumerate(keys(dv))
     if occursin("HANK", tag) && k == "consensus"

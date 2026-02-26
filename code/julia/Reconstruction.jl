@@ -1117,6 +1117,12 @@ function move_data_to_dict(df, periods, gdp_series, model_options, time_p, data_
 
         integrate_quantile_functions!(new_data_pcf, split_pcfs, grid_pcf, intervals, correction_vec)
 
+        # Share-group integration: bot50/mid40/top10
+        share_spec = [0.5, 0.4, 0.1]
+        share_intervals = vcat([0.0 + 1e-6], cumsum(share_spec)[1:end-1], [1.0 - 1e-6])
+        share_data_pcf = [zeros(length(share_spec), T) for _ in 1:D]
+        integrate_quantile_functions!(share_data_pcf, split_pcfs, grid_pcf, share_intervals, correction_vec)
+
         # We need to generate new data_pcf, which are the average quantiles over the intervals
         # for m in eachindex(new_data_pcf)
         #     for t in axes(new_data_pcf[m], 2)
@@ -1156,7 +1162,23 @@ function move_data_to_dict(df, periods, gdp_series, model_options, time_p, data_
     levels, shares = generate_shares_levels(pcfs, model_options, gdp_series)
     d_data_dict = create_time_series_dictionary([copulas, pcfs, levels, shares], estimator, measures)
 
-    # Exporting raw data 
+    # Inject share-group means (bot50/mid40/top10) into the dictionary
+    if typeof(estimator) <: SeriesEstimator && @isdefined(share_data_pcf)
+        # Order the share data onto the full quarterly timeline (same as pcfs)
+        share_pcf_cat = vcat([share_data_pcf[m] for m in eachindex(share_data_pcf)]...)
+        share_pcf_ordered = order_measures(share_pcf_cat, periods, tot_periods, freq, freq_type[k], tmin, time_dict[k], 1)
+        n_share = length(share_spec)
+        share_indices = [I for I in Iterators.partition(axes(share_pcf_ordered, 1), n_share)]
+
+        share_labels = ["bot50", "mid40", "top10"]
+        for (i, meas) in enumerate(sort(measures))
+            for (si, sl) in enumerate(share_labels)
+                d_data_dict[meas]["quantiles"]["common series"][sl] = share_pcf_ordered[share_indices[i], :][si, :]
+            end
+        end
+    end
+
+    # Exporting raw data
     export_raw_data(d_data_dict, estimator, data_source, measures, time_p, tag)
 
     return d_data_dict
