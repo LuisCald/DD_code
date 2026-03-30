@@ -204,8 +204,8 @@ function get_copula_coefficients(X, W, N)
     c_N = 0.0
     rho_m = zeros(cl)
 
-    # Multi-thread this 
-    Threads.@threads for (xx, m) in collect(enumerate(Iterators.product(ranges...)))
+    # Threads.@threads  # removed: called from within threaded bootstrap loop
+    for (xx, m) in collect(enumerate(Iterators.product(ranges...)))
         tup_m = Tuple(m)
         rho_m[xx] = estimate_phi(X, W, tup_m)
     end

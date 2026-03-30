@@ -1,17 +1,15 @@
-function run_black_box_opt(SSM, param_vector, param_sizes, priors, measures)
+function run_black_box_opt(SSM, param_vector, param_sizes, priors, measures; opttime::Int = length(param_vector) * 3, pop_size::Int = 200)
     step_ranges = define_step_ranges(param_sizes, priors, param_vector)
-    opttime = length(param_vector) * 3
-    res = bboptimize(SSM, param_vector; SearchRange=step_ranges, Method=:adaptive_de_rand_1_bin_radiuslimited, MaxTime=opttime, TraceMode=:compact, TraceInterval=60)
+    res = bboptimize(SSM, param_vector; SearchRange=step_ranges, Method=:adaptive_de_rand_1_bin_radiuslimited, MaxTime=opttime, PopulationSize=pop_size, TraceMode=:compact, TraceInterval=60)
     return best_candidate(res)
 end
 
-function run_black_box_hyperopt(objective_function, hyperpriors)
-    step_ranges = [(hyperpriors[i].μ - 20 * hyperpriors[i].σ, hyperpriors[i].μ + 20 * hyperpriors[i].σ) for i in eachindex(hyperpriors)]
-    func_evals = 10000
-    res = bboptimize(objective_function; SearchRange=step_ranges, Method=:adaptive_de_rand_1_bin, MaxFuncEvals=func_evals, TraceMode=:compact, TraceInterval=60)
-
-    return best_candidate(res)
-end
+# # OLD: default PopulationSize (50)
+# function run_black_box_opt(SSM, param_vector, param_sizes, priors, measures; opttime::Int = length(param_vector) * 3)
+#     step_ranges = define_step_ranges(param_sizes, priors, param_vector)
+#     res = bboptimize(SSM, param_vector; SearchRange=step_ranges, Method=:adaptive_de_rand_1_bin_radiuslimited, MaxTime=opttime, TraceMode=:compact, TraceInterval=60)
+#     return best_candidate(res)
+# end
 
 
 function define_step_ranges(param_sizes, priors, param_vector)
@@ -66,10 +64,11 @@ function define_step_ranges(param_sizes, priors, param_vector)
         step_ranges[i] = (-3 * priors[3].σ + priors[3].μ, 3 * priors[3].σ + priors[3].μ)
     end
 
-    # For Ω_corr
+    # For Ω_corr (unconstrained → tanh maps to correlations; tanh(3)=0.995, tanh(10)≈1 causes degeneracy)
     for (q, i) in enumerate((l_A+l_B+l_C+l_D+l_Ωf+l_Ωy+1):(l_A+l_B+l_C+l_D+l_Ωf+l_Ωy+l_Ω_corr))
-        # it's just the real line
-        step_ranges[i] = (-10, 10)
+        # # OLD: (-10, 10) — allows tanh saturation to ±1, trapping optimizer
+        # step_ranges[i] = (-10, 10)
+        step_ranges[i] = (-3, 3)
     end
 
     # For Σ

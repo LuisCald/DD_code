@@ -667,13 +667,18 @@ function transform_DCT_boot(DCT_boot, time_p, year_vec, freq, freq_type, time_di
         end
     end
 
-    # Demean across bootstraps 
+    # Demean across bootstraps
     DCT_boot .= DCT_boot .- mean(DCT_boot, dims=3)
 
-    # VCV estimation 
+    # NaN rows are entirely unobserved coefficients — replacing with 0 gives them
+    # zero variance/covariance, equivalent to nancov but dispatches to BLAS (~1000x faster)
+    replace!(DCT_boot, NaN => 0.0)
+
+    # VCV estimation
     sizes = size(DCT_boot)
     DCT_boot_reshaped = reshape(DCT_boot, (sizes[1], sizes[2] * sizes[3]))
-    Σ = nancov(DCT_boot_reshaped, dims=2) # time-invariant VCV of the measurements 
+    # Σ = nancov(DCT_boot_reshaped, dims=2) # time-invariant VCV of the measurements
+    Σ = cov(DCT_boot_reshaped, dims=2)
     replace!(Σ, -0.0 => 0.0)
 
     # Find indices along diagonal that are 0.0 
@@ -1370,36 +1375,52 @@ function set_measurements(MV, pcs, means, stds, agg_data, pool, proj, files, tim
     end
 
     # Defining components of the measurement equation
+    aggregate_rep = hasproperty(model_options, :aggregate_rep) ? model_options.aggregate_rep : :as_states
+
     y = vcat(MV...)
     N_dist = size(y, 1)                     # distributional measurements
-    y = vcat(y, controls) # TODO: timing?
-    meas_count = N_dist + q
 
     # ───────────────────────────────────────────────
     # 1.  Stacked projection Γ̃
     # ----------------------------------------------
-    # proj_dist = repeat(proj, n_dfs)                   # N_dist × r   (distributional loadings)
     proj_dist = vcat(Gⱼ...)
 
-    # ───────────────────────────────────────────────
-    # 2.  Pre–allocate measurement matrices
-    # ----------------------------------------------
-    G = [zeros(meas_count, factor_count * 4 + q) for _ in 1:tot_periods]  # each G[t] is (meas × state)
+    if aggregate_rep == :as_inputs
+        # ─── :as_inputs ─── y has no aggregate rows; G is N_dist × 4r ────────
+        meas_count = N_dist
 
-    # ───────────────────────────────────────────────
-    # 3.  Fill each G[t]
-    # ----------------------------------------------
-    for t in 1:tot_periods
-        # 3a. Selector for distributional block
-        mask_dist = (!isnan).(y[1:N_dist, t])
-        H_dist = Diagonal(mask_dist)                 # N_dist × N_dist
+        # 2.  Pre–allocate measurement matrices (factor-only columns)
+        G = [zeros(meas_count, factor_count * 4) for _ in 1:tot_periods]
 
-        # 3b. Upper block: H_t * proj_dist     (loads on F_t, zeros on Y_t)
-        G[t][1:N_dist, 1:factor_count*4] .= H_dist * proj_dist
+        # 3.  Fill each G[t] — distributional block only
+        for t in 1:tot_periods
+            mask_dist = (!isnan).(y[1:N_dist, t])
+            H_dist = Diagonal(mask_dist)
+            G[t][1:N_dist, 1:factor_count*4] .= H_dist * proj_dist
+        end
+        # controls are stored as u in the StateSpaceModel (exogenous inputs to Kalman filter)
 
-        # 3c. Lower block: I_q on the Y-columns (columns factor_count+1 : factor_count+q)
-        for i in 1:q
-            G[t][N_dist+i, factor_count*4+i] = 1.0            # pick out Y_t element i exactly
+    else
+        # ─── :as_states (default) ─── y includes aggregates; G has agg columns ─
+        y = vcat(y, controls) # TODO: timing?
+        meas_count = N_dist + q
+
+        # 2.  Pre–allocate measurement matrices
+        G = [zeros(meas_count, factor_count * 4 + q) for _ in 1:tot_periods]  # each G[t] is (meas × state)
+
+        # 3.  Fill each G[t]
+        for t in 1:tot_periods
+            # 3a. Selector for distributional block
+            mask_dist = (!isnan).(y[1:N_dist, t])
+            H_dist = Diagonal(mask_dist)                 # N_dist × N_dist
+
+            # 3b. Upper block: H_t * proj_dist     (loads on F_t, zeros on Y_t)
+            G[t][1:N_dist, 1:factor_count*4] .= H_dist * proj_dist
+
+            # 3c. Lower block: I_q on the Y-columns (columns factor_count+1 : factor_count+q)
+            for i in 1:q
+                G[t][N_dist+i, factor_count*4+i] = 1.0            # pick out Y_t element i exactly
+            end
         end
     end
 
@@ -1447,7 +1468,7 @@ function perform_pca(pool, measures, type, tag; additional_data_blocks=false, be
         proj = projection(M) * diagm(λ)
         println("The size of the projection matrix for the aggs. is $(size(proj))")
         
-        Mdim = tag == " less AF" ? 3 : tag == " more AF" ? 15 : tag == " all AF" ? 30 : tag == " less DF and AF" ? 3 : occursin("HANK", tag) ? size(proj, 2) : 11
+        Mdim = tag == " less AF" ? 3 : tag == " more AF" ? 15 : tag == " all AF" ? 30 : tag == " less DF and AF" ? 3 : occursin("HANK", tag) ? 8 : 11
 
         # Import jld2
         if best_aggs
@@ -1477,8 +1498,9 @@ function perform_pca(pool, measures, type, tag; additional_data_blocks=false, be
         elseif occursin("HANK full", tag)
             M = MultivariateStats.fit(PCA, data_matrix; maxoutdim=8, method=:svd) # mean=0
         elseif occursin("HANK", tag)
-            # M = MultivariateStats.fit(PCA, data_matrix; maxoutdim=8, method=:svd) # mean=0
-            M = MultivariateStats.fit(PCA, data_matrix; pratio=pr, method=:svd) # mean=0
+            M = MultivariateStats.fit(PCA, data_matrix; maxoutdim=5, method=:svd) # mean=0, based on scree
+            # M = MultivariateStats.fit(PCA, data_matrix; maxoutdim=5, method=:svd) # mean=0, based on scree
+            # M = MultivariateStats.fit(PCA, data_matrix; pratio=0.95, method=:svd) # mean=0
         else
             M = MultivariateStats.fit(PCA, data_matrix; pratio=pr, method=:svd) # mean=0
         end
@@ -1618,31 +1640,32 @@ function select_aggregates(aggregates, measures, tot_periods, tmin, tmax, agg_la
     # Fill matrix with density, percentile function measurements 
     data_only_aggs = copy(transpose(Matrix{Float64}(data_only_aggs)))  # removes date column, K x T
 
-    # if occursin("HANK", tag)
-    #     # HANK: shocks are independent AR(1)s, lags are redundant — use contemporaneous only
-    #     super_aggs = data_only_aggs[:, 1:end-agg_lags]
-    #     standardize_aggs!(super_aggs)
+    if occursin("HANK", tag)
+        # HANK: shocks are independent AR(1)s, lags are redundant — use contemporaneous only
+        super_aggs = data_only_aggs[:, 1:end-agg_lags]
+        standardize_aggs!(super_aggs)
+        u_proj, agg_pcs, _ = perform_pca(super_aggs, measures, :aggs, tag)
+        agg_pcs = agg_pcs[:, 1:end-dropped_rows_ub]
 
-    #     u_proj, agg_pcs, _ = perform_pca(super_aggs, measures, :aggs, tag)
+        # agg_pcs = super_aggs[:, 1:end-dropped_rows_ub]
+        # u_proj = rand(9,9) # dummy projection matrix since we are not doing PCA
+        agg_count = size(agg_pcs, 1)
+        return u_proj, agg_pcs, agg_count
+    else
+        super_aggs = data_only_aggs[:, 1:end-agg_lags] # N by T
 
-    #     agg_pcs = agg_pcs[:, 1:end-dropped_rows_ub]
-    #     agg_count = size(agg_pcs, 1)
-    #     return u_proj, agg_pcs, agg_count
-    # else
-    super_aggs = data_only_aggs[:, 1:end-agg_lags] # N by T
+        for i in 1:agg_lags
+            super_aggs = vcat(super_aggs, data_only_aggs[:, i+1:end-agg_lags+i])
+        end
 
-    for i in 1:agg_lags
-        super_aggs = vcat(super_aggs, data_only_aggs[:, i+1:end-agg_lags+i])
+        standardize_aggs!(super_aggs)
+
+        u_proj, agg_pcs, _ = perform_pca(super_aggs, measures, :aggs, tag)
+
+        agg_pcs = agg_pcs[:, 1:end-dropped_rows_ub]
+        agg_count = size(agg_pcs, 1)
+        return u_proj, agg_pcs, agg_count
     end
-
-    standardize_aggs!(super_aggs)
-
-    u_proj, agg_pcs, _ = perform_pca(super_aggs, measures, :aggs, tag)
-
-    agg_pcs = agg_pcs[:, 1:end-dropped_rows_ub]
-    agg_count = size(agg_pcs, 1)
-    return u_proj, agg_pcs, agg_count
-    # end
 end
 
 # function impose_stationarity(aggregates)
@@ -1990,90 +2013,267 @@ end
 # end
 
 
-function n_factors(X, r_max; include_plot::Int=0, τ::Float64=0.5)
-    # Estimates the number of relevant factors for dataset X following Freyaldenhoven (2021)
-    #
-    # INPUT
-    # X: (Txn) matrix of data
-    # r_max: upper bound on number of factors
-    # include_plot(optional): If set to 1 includes illustrative figures)
-    # τ(optional): default is 0.5
-    #
-    # OUTPUT
-    # FR: Estimate for the number of factors
+# function n_factors(X, r_max; include_plot::Int=0, τ::Float64=0.5)
+#     # OLD VERSION — had bugs: (1) SVD on X' instead of X, (2) d[r_max:end] instead of
+#     # d[r_max+1:end], (3) returned MOdim instead of FR.  Replaced below.
+# end
 
+"""
+    n_factors_freyaldenhoven(X, r_max; τ=0.5)
+
+Estimate the number of factors following Freyaldenhoven (2021).
+
+# Arguments
+- `X`: T×n data matrix (rows = time, cols = series)
+- `r_max`: upper bound on number of factors
+- `τ`: tuning parameter (default 0.5)
+
+# Returns
+- `FR::Int`: estimated number of factors
+"""
+function n_factors_freyaldenhoven(X, r_max; τ::Float64=0.5)
     T, n = size(X)
+
+    # SVD decomposition (X is T×n, so V is n×n — columns are loadings directions)
+    _, d, V = svd(X ./ sqrt(T); full=false)
+
+    # Clamp r_max; need at least one leftover singular value for noise estimate
+    r_max = min(r_max, length(d) - 1)
+    if r_max < 1
+        @warn "Freyaldenhoven: T=$T too small relative to n=$n (only $(length(d)) " *
+              "singular values). Returning 1."
+        return 1
+    end
+
     z = round(Int, min(0.7 * n^τ * sqrt(log(log(n))), n))
 
-    # SVD decomposition
-    _, d, V = svd(X' ./ sqrt(T))
-
-    # Factor Loadings i.e., Projection matrix
-    # Sometimes d is shorter than r_max, so we need to catch that error and adjust
-    r_max = min(r_max, length(d))
+    # Factor Loadings
     Lambda = V[:, 1:r_max] * Diagonal(d[1:r_max])
 
-
-    # Sorting
+    # Sorting: keep z largest absolute loadings per factor
     sorted = sort(abs.(Lambda), dims=1, rev=true)
     largest_z = sorted[1:z, :]
 
-    error_part = d[r_max:end]
+    # Noise variance from residual singular values
+    error_part = d[r_max+1:end]
     estimate_variance = sum(error_part .^ 2) / n
 
     Shat = zeros(r_max)
     T2 = zeros(r_max)
 
     for k in 1:r_max
-        Shat[k] = ((largest_z[:, k]' * largest_z[:, k] / z) / sqrt(Lambda[:, k]' * Lambda[:, k] / n))
+        Shat[k] = (largest_z[:, k]' * largest_z[:, k] / z) /
+                   sqrt(Lambda[:, k]' * Lambda[:, k] / n)
         T2[k] = (Lambda[:, k]' * Lambda[:, k]) * Shat[k]^2
     end
 
     incl_mock_T2 = [estimate_variance * n; T2]
     T2_ratio = incl_mock_T2[1:r_max] ./ T2[1:r_max]
-    FR = findall(x -> x == maximum(T2_ratio), T2_ratio)[1]
-    FR -= 1
+    FR = argmax(T2_ratio) - 1
 
-    # Determine 'maxoutdim'
-    eig_X = d[1:min(n, T)] .^ 2
-    MOdim = sum(incl_mock_T2[1:r_max] .> eig_X[1:r_max])
-    println("Max dimension outputed: ", MOdim)
-    println("FR: ", FR)
+    return FR
+end
 
-    init_path = BASE_PATH
+# Keep old name as alias for backward compatibility
+n_factors(X, r_max; τ::Float64=0.5) = n_factors_freyaldenhoven(X, r_max; τ=τ)
 
-    if include_plot == 1
-        eig_X = d[1:min(n, T)] .^ 2
+"""
+    n_factors_bai_ng(X, r_max; gnum=2, demean=1)
 
-        plot1 = Plots.scatter(0:r_max, [1; Shat .^ 2], ylab=L"\textrm{Value}", ms=5, markerstrokewidth=3, mc=:orange, guidefontsize=12, tickfontsize=12, legendefontsize=12, xformatter=:latex, yformatter=:latex, xlabel=L"k", label=L"\hat{S}^2", legend=:topright)
-        Plots.savefig(init_path * "/7_Results/factor_analysis/factor_analysis_plot1.pdf")
+Estimate number of factors by Bai & Ng (2002) information criteria.
 
-        plot2 = Plots.plot(0:r_max, [estimate_variance * n; eig_X[1:r_max]], lw=2, guidefontsize=12, tickfontsize=12, legendefontsize=12, xformatter=:latex, yformatter=:latex, xlabel=L"k", ylabel=L"\textrm{Value}", label=[L"\hat{\Upsilon}^0_k" L"\hat{\Upsilon}^2_k"], legend=:topright)
-        Plots.scatter!([0], [0], label=" ", ms=0, mc=:white, msc=:white)
-        Plots.plot!(0:r_max, incl_mock_T2, seriestype=:line, lw=2, label=L"\hat{\Upsilon}^2_k")
+# Arguments
+- `X`: T×n data matrix
+- `r_max`: maximum number of factors
+- `gnum`: penalty variant (1=ICp1, 2=ICp2, 3=ICp3, 4=AIC1, 5=BIC1, 6=AIC2, 7=BIC2,
+           8=AIC3, 9=BIC3, 10=modified CP)
+- `demean`: 0=raw, 1=demean, 2=standardize
 
-        Plots.savefig(init_path * "7_Results/factor_analysis/factor_analysis_plot2.pdf")
+# Returns
+- `numfac::Int`: estimated number of factors
+"""
+function n_factors_bai_ng(X::AbstractMatrix{<:Real}, r_max::Int;
+                          gnum::Int=2, demean::Int=1)
+    T, N = size(X)
 
-        # Determine 'maxoutdim'
-        MOdim = sum(incl_mock_T2[1:r_max] .> eig_X[1:r_max])
-        println("Max dimension outputed:", MOdim)
-
-        M = MultivariateStats.fit(PCA, Matrix(X' ./ sqrt(T)); maxoutdim=MOdim, method=:svd, mean=0)
-
-        # Plot the factors 
-        pcs = MultivariateStats.transform(M, Matrix(X' ./ sqrt(T)))
-        saxis = 1:size(pcs, 2)
-
-        ls_vec = [:solid, :solid, :solid, :dash, :dot, :dashdot, :solid, :solid, :solid, :solid, :solid, :solid, :solid, :solid, :solid, :solid]
-        lc_vec = [:black, :red, :blue, :green, :orange, :purple, :brown, :pink, :cyan, :magenta, :yellow, :gray]
-        lo_vec = [1.0, 0.9, 0.8, 0.6, 0.4, 0.2, [0.2 for _ in 1:size(pcs, 2)-6]...]
-        Plots.plot()
-        for i in axes(pcs, 1)
-            Plots.plot!(saxis, pcs[i, :], xformatter=:latex, yformatter=:latex, legend_columns=3, label=L"\textrm{Factor \,\, %$(i)}", linealpha=lo_vec[i], ls=ls_vec[i], lc=lc_vec[i], ylab=L"\textrm{Factor\,\, Value}", xticks=(saxis[1:20:end], [L"%$(date)"[1:5] * "\$" for (_, date) in enumerate(fred_qd_stationary[1:20:end, :daten])]))
-        end
-        Plots.savefig(init_path * "7_Results/factor_analysis/agg_factors.pdf")
+    # Transform data
+    if demean == 2
+        μ = mean(X, dims=1); σ = std(X, dims=1, corrected=true)
+        xtr = (X .- μ) ./ σ
+    elseif demean == 1
+        xtr = X .- mean(X, dims=1)
+    else
+        xtr = Float64.(X)
     end
 
-    return MOdim
+    # Economy SVD
+    U, S, Vt = svd(xtr; full=false)
+    Fhat0 = U * Diagonal(S)     # T × min(T,N)
+    Lhat0 = Vt                  # min(T,N) × N
+
+    # Penalty constants
+    NT = N * T
+    NTsum = N + T
+
+    # Build penalty for each k
+    kgNT = zeros(Float64, r_max)
+    for k in 1:r_max
+        kgNT[k] = if gnum == 1
+            k * NTsum / NT * log(NT / NTsum)
+        elseif gnum == 2
+            k * NTsum / NT * log(min(N, T))
+        elseif gnum == 3
+            k * log(min(N, T)) / min(N, T)
+        elseif gnum == 4
+            k * 2 / T
+        elseif gnum == 5
+            k * log(T) / T
+        elseif gnum == 6
+            k * 2 / N
+        elseif gnum == 7
+            k * log(N) / N
+        elseif gnum == 8
+            k * 2 * (NTsum - k) / NT
+        elseif gnum == 9
+            k * (NTsum - k) * log(NT) / NT
+        elseif gnum == 10
+            k * 2 * (sqrt(N) + sqrt(T))^2 / NT
+        else
+            throw(ArgumentError("gnum must be 1–10"))
+        end
+    end
+
+    # IC for each k
+    IC = zeros(Float64, r_max)
+    for k in 1:r_max
+        Chat = Fhat0[:, 1:k] * Lhat0[1:k, :]   # T×N
+        ehat = xtr - Chat
+        VF = mean(ehat .^ 2)
+        IC[k] = log(VF) + kgNT[k]
+    end
+
+    return argmin(IC)
+end
+
+"""
+    n_factors_eigenvalue_ratio(X, r_max)
+
+Estimate number of factors by eigenvalue-ratio criterion (Ahn & Horenstein 2013).
+"""
+function n_factors_eigenvalue_ratio(X::AbstractMatrix{<:Real}, r_max::Int)
+    T, N = size(X)
+    eigs_sorted = sort(eigvals(X' * X / (T * N)), rev=true)
+    m = min(r_max + 1, length(eigs_sorted) - 1)
+    ratios = eigs_sorted[1:m] ./ eigs_sorted[2:m+1]
+    return argmax(ratios)
+end
+
+"""
+    n_factors_growth_ratio(X, r_max)
+
+Estimate number of factors by growth-ratio criterion (Ahn & Horenstein 2013).
+"""
+function n_factors_growth_ratio(X::AbstractMatrix{<:Real}, r_max::Int)
+    T, N = size(X)
+    eigs_sorted = sort(eigvals(X' * X / (T * N)), rev=true)
+    m = min(r_max + 1, length(eigs_sorted) - 1)
+    # μ*_j = λ_j / Σ_{i>j} λ_i
+    mu_star = zeros(Float64, m + 1)
+    for j in 1:m+1
+        tail = sum(eigs_sorted[j+1:end])
+        mu_star[j] = tail > 0 ? eigs_sorted[j] / tail : Inf
+    end
+    ratios = log1p.(mu_star[1:m]) ./ log1p.(mu_star[2:m+1])
+    return argmax(ratios)
+end
+
+"""
+    select_n_factors(X, r_max; verbose=true)
+
+Run all four factor-selection criteria and return a NamedTuple with individual
+estimates and a consensus (median).
+
+# Returns
+`(freyaldenhoven, bai_ng_ICp2, eigenvalue_ratio, growth_ratio, consensus)`
+"""
+function select_n_factors(X::AbstractMatrix{<:Real}, r_max::Int; verbose::Bool=true)
+    fr  = n_factors_freyaldenhoven(X, r_max)
+    bn  = n_factors_bai_ng(X, r_max; gnum=2)
+    er  = n_factors_eigenvalue_ratio(X, r_max)
+    gr  = n_factors_growth_ratio(X, r_max)
+    con = round(Int, median([fr, bn, er, gr]))
+
+    if verbose
+        println("Factor selection (r_max=$r_max):")
+        println("  Freyaldenhoven (2021) : $fr")
+        println("  Bai & Ng ICp2  (2002) : $bn")
+        println("  Eigenvalue ratio (AH) : $er")
+        println("  Growth ratio     (AH) : $gr")
+        println("  Consensus (median)    : $con")
+    end
+
+    return (freyaldenhoven=fr, bai_ng_ICp2=bn, eigenvalue_ratio=er,
+            growth_ratio=gr, consensus=con)
+end
+
+"""
+    scree_plot(X; k_max=nothing, savepath=nothing)
+
+Plot eigenvalue spectrum, cumulative explained variance, and eigenvalue ratios
+for factor selection diagnostics.  `X` is T×N.
+
+Returns the vector of eigenvalues (descending).
+"""
+function scree_plot(X::AbstractMatrix{<:Real}; k_max::Union{Nothing,Int}=nothing,
+                    savepath::Union{Nothing,String}=nothing)
+    T, N = size(X)
+    Xc = X .- mean(X, dims=1)
+    _, S, _ = svd(Xc; full=false)
+    eigs = S .^ 2          # eigenvalues of X'X / T  (proportional)
+    k = k_max === nothing ? min(T, N, 20) : min(k_max, length(eigs))
+    eigs_k = eigs[1:k]
+
+    # Explained variance shares
+    total_var = sum(eigs)
+    shares = eigs_k ./ total_var
+    cumshares = cumsum(shares)
+
+    # Eigenvalue ratios λ_k / λ_{k+1}
+    ratios = eigs_k[1:end-1] ./ eigs_k[2:end]
+
+    # ── Panel 1: Eigenvalues (scree) ──
+    p1 = Plots.bar(1:k, eigs_k, label="Eigenvalue", xlabel="Factor", ylabel="Eigenvalue",
+                   title="Scree Plot", legend=:topright, bar_width=0.6, fillalpha=0.7)
+
+    # ── Panel 2: Cumulative explained variance ──
+    p2 = Plots.plot(1:k, cumshares, marker=:circle, ms=4, label="Cumulative",
+                    xlabel="Factor", ylabel="Cum. Explained Var.", title="Explained Variance",
+                    ylim=(0, 1.05), legend=:bottomright)
+    Plots.hline!([0.90, 0.95, 0.99], ls=:dash, lw=0.8,
+                 label=["90%" "95%" "99%"], color=[:gray :gray :gray])
+
+    # ── Panel 3: Eigenvalue ratios ──
+    p3 = Plots.bar(1:k-1, ratios, label="λ_k / λ_{k+1}", xlabel="Factor k",
+                   ylabel="Ratio", title="Eigenvalue Ratios", bar_width=0.6, fillalpha=0.7)
+
+    p = Plots.plot(p1, p2, p3, layout=(1, 3), size=(1200, 350), margin=5Plots.mm)
+
+    if savepath !== nothing
+        mkpath(dirname(savepath))
+        Plots.savefig(p, savepath)
+        println("Scree plot saved to: $savepath")
+    end
+    display(p)
+
+    # Print table
+    println("\n  k  eigenvalue   share    cumul.   ratio")
+    println("  " * "─"^48)
+    for i in 1:k
+        r_str = i < k ? @sprintf("%.2f", ratios[i]) : "  —"
+        @printf("  %2d  %10.2f  %6.3f   %6.3f   %s\n",
+                i, eigs_k[i], shares[i], cumshares[i], r_str)
+    end
+
+    return eigs
 end
 

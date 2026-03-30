@@ -23,98 +23,168 @@
 function estimate_prior(model_elements::StateSpaceModel, model_options::ModelOptions)
     """Implements an independent Normal-Cauchy prior. """
 
-    # Unloading 
+    # Unloading
     @unpack agg_count, factor_count, pcs, u, MV, proj = model_elements
     @unpack estimator, measures, constant, lags, prior, measurement_error, estimation_object, case, errors_process, pre_multiply = model_options
     @unpack grid_pcf, grid_cop = estimator
     @unpack hyperparameters = prior
 
+    aggregate_rep = hasproperty(model_options, :aggregate_rep) ? model_options.aggregate_rep : :as_states
+
     number_of_dfs = length(MV)
     dimension = length(measures)
 
-    # Define hyperpriors
-    hyperpriors = [
-        # Minnesota parameters 
-        # Uniform(0.2, 0.99), # specifying the size of the prior variance of endogenous variables, which do not correspond to own lags
-        # Uniform(-0.99, 0.99), # persistence of state LOM
-        # Uniform(-0.99, 0.99), # persistence of state LOM for aggregates
-        Normal(0, 5),
-        Normal(0, 5),
-        Normal(0, 5),
-        Normal(0, 1), # variance of the variances - factors
-        Normal(0, 1), # variance of the variances - aggregates
-        Normal(0, 2) # hyperparameter for the shape of correlations of LKJ prior, ν
-    ]
+    if aggregate_rep == :as_inputs
+        # ─── :as_inputs ─── No C, D; Ω is factor-only; 4 hyperparameters ───
+        hyperpriors = [
+            Normal(0, 5),   # κ_1  (prior variance scaling)
+            Normal(0, 5),   # κ_5  (factor persistence)
+            Normal(0, 1),   # σ_ϕ  (variance of factor persistence prior)
+            Normal(0, 2)    # ν    (LKJ shape)
+        ]
 
-    # Initial hyperparameters
-    hyper_params = [0.5, 0.5, 0.5, 0.5, 0.5, 3.0] # initial values for the hyperparameters
+        hyper_params = [0.5, 0.5, 0.5, 3.0]
 
-    # For Minnesota prior
-    hyperparameters[1] = 0.05
-    hyperparameters[2] = hyper_params[1]
-    hyperparameters[6] = hyper_params[2]
-    hyperparameters[7] = hyper_params[3]
-    hyper_params[4] = log(exp(hyper_params[4]) + 1)
-    hyper_params[5] = log(exp(hyper_params[5]) + 1)
+        # For Minnesota prior
+        hyperparameters[1] = 0.05
+        hyperparameters[2] = hyper_params[1]
+        hyperparameters[6] = hyper_params[2]
+        hyper_params[3] = log(exp(hyper_params[3]) + 1)
 
-    # Get initial parameter values
-    prior_mean, A_prior, B_prior, C_prior, D_prior, V_prior = minnesota_prior(hyperparameters, pcs, u, lags, estimator)  # TODO: assumes aggs only have 1 lag
+        # Get initial parameter values (no C, D)
+        prior_mean, A_prior, B_prior, _, _, V_prior = minnesota_prior(hyperparameters, pcs, u, lags, estimator; aggregate_rep=:as_inputs)
 
-    # For measurement error
-    n_objs = (dimension + 1)
-    n_param = n_objs * number_of_dfs + agg_count
+        # For measurement error (no aggregate entries)
+        n_objs = (dimension + 1)
+        n_param = n_objs * number_of_dfs
 
-    # ───  Extract the two persistence hyper-parameters  ─────────────────────────
-    ρ_F = hyperparameters[6]        # κ₅  = persistence target for the  r-factor block
-    ρ_Y = hyperparameters[7]        # κ₆  = persistence target for the  q-aggregate block
+        # ───  Factor persistence hyper-parameter only  ─────────────────────────
+        ρ_F = hyperparameters[6]
+        ϕ_F = log(exp(1 - ρ_F^2) - 1)
 
-    #  Same log-transform you already used for ρ_F, now applied to both blocks
-    ϕ_F = log(exp(1 - ρ_F^2) - 1)    # ⇒ Normal prior on ϕ_F  implies Beta prior on ρ_F
-    ϕ_Y = log(exp(1 - ρ_Y^2) - 1)    # ⇒ identical mapping for the aggregate persistence
+        σ_ϕ = hyper_params[3]   # already softplus-corrected
+        corr_Ω_shape = 1 + log(1 + exp(hyper_params[4]))
 
-    # ───  Prior list  ──────────────────────────────────────────────────────────
-    σ_ϕ = hyper_params[4] # These are already corrected
-    σ_ϕ_Y = hyper_params[5]
+        # Defining initial priors (no aggregate persistence, factor_count-only LKJ)
+        priors = [
+            MvNormal(prior_mean, V_prior),           # [1] coefficients of A,B
+            Normal(ϕ_F, σ_ϕ),                        # [2] prior for factor persistence
+            LKJCholesky(factor_count, corr_Ω_shape),  # [3] prior for factor correlations (factor_count only)
+        ]
 
-    corr_Ω_shape = 1 + log(1 + exp(hyper_params[6])) # shape parameter of 2, meaning mild prior towards identity matrix
-
-    # Defining initial priors
-    priors = [
-        MvNormal(prior_mean, V_prior),   # coefficients of A,B,C,D
-        Normal(ϕ_F, σ_ϕ),               # prior for factor persistence
-        Normal(ϕ_Y, σ_ϕ_Y),               # prior for aggregate persistence
-        LKJCholesky(factor_count + agg_count, corr_Ω_shape),  # prior for factor correlations
-    ]
-
-    # For measurement equation
-    ϕₘ = log(exp(1) - 1) # when softplus applied to it, it should be 1, which is our prior mean on the measures
-    for _ in 1:number_of_dfs
-        for _ in 1:n_objs
-            push!(priors, Normal(ϕₘ, 2)) # was (5,10)
+        # Measurement error priors (no aggregate entries)
+        ϕₘ = log(exp(1) - 1)
+        for _ in 1:number_of_dfs
+            for _ in 1:n_objs
+                push!(priors, Normal(ϕₘ, 2))
+            end
         end
+
+        # Pushing hyperpriors to the end of the priors list
+        push!(priors, hyperpriors...)
+
+        # Get initial parameters: Errors (factor-only Ω)
+        Ωf_mode = repeat([StatsBase.mode(priors[2])], factor_count)
+        Ω_var = Ωf_mode
+        Ω_corr = lower_offdiag(diagm(ones(factor_count)))
+        Σ_mode = [StatsBase.mode(priors[3+i]) for i in 1:n_param]
+        Σ_prior = Diagonal(Σ_mode)
+
+        # Final parameter vector (6 blocks: A, B, Ω_var, Ω_corr, Σ, H)
+        param_vector = [A_prior, B_prior, Ω_var, Ω_corr, Σ_prior, hyper_params]
+
+        # Getting indices for measurement error
+        meas_ind = extract_meas_ind(estimator, dimension)
+
+        return Prior(priors, param_vector), meas_ind
+
+    else
+        # ─── :as_states (default) ─── Original behavior ───────────────────────
+
+        # Define hyperpriors
+        hyperpriors = [
+            # Minnesota parameters
+            # Uniform(0.2, 0.99), # specifying the size of the prior variance of endogenous variables, which do not correspond to own lags
+            # Uniform(-0.99, 0.99), # persistence of state LOM
+            # Uniform(-0.99, 0.99), # persistence of state LOM for aggregates
+            Normal(0, 5),
+            Normal(0, 5),
+            Normal(0, 5),
+            Normal(0, 1), # variance of the variances - factors
+            Normal(0, 1), # variance of the variances - aggregates
+            Normal(0, 2) # hyperparameter for the shape of correlations of LKJ prior, ν
+        ]
+
+        # Initial hyperparameters
+        hyper_params = [0.5, 0.5, 0.5, 0.5, 0.5, 3.0] # initial values for the hyperparameters
+
+        # For Minnesota prior
+        hyperparameters[1] = 0.05
+        hyperparameters[2] = hyper_params[1]
+        hyperparameters[6] = hyper_params[2]
+        hyperparameters[7] = hyper_params[3]
+        hyper_params[4] = log(exp(hyper_params[4]) + 1)
+        hyper_params[5] = log(exp(hyper_params[5]) + 1)
+
+        # Get initial parameter values
+        prior_mean, A_prior, B_prior, C_prior, D_prior, V_prior = minnesota_prior(hyperparameters, pcs, u, lags, estimator)  # TODO: assumes aggs only have 1 lag
+
+        # For measurement error
+        n_objs = (dimension + 1)
+        n_param = n_objs * number_of_dfs + agg_count
+
+        # ───  Extract the two persistence hyper-parameters  ─────────────────────────
+        ρ_F = hyperparameters[6]        # κ₅  = persistence target for the  r-factor block
+        ρ_Y = hyperparameters[7]        # κ₆  = persistence target for the  q-aggregate block
+
+        #  Same log-transform you already used for ρ_F, now applied to both blocks
+        ϕ_F = log(exp(1 - ρ_F^2) - 1)    # ⇒ Normal prior on ϕ_F  implies Beta prior on ρ_F
+        ϕ_Y = log(exp(1 - ρ_Y^2) - 1)    # ⇒ identical mapping for the aggregate persistence
+
+        # ───  Prior list  ──────────────────────────────────────────────────────────
+        σ_ϕ = hyper_params[4] # These are already corrected
+        σ_ϕ_Y = hyper_params[5]
+
+        corr_Ω_shape = 1 + log(1 + exp(hyper_params[6])) # shape parameter of 2, meaning mild prior towards identity matrix
+
+        # Defining initial priors
+        priors = [
+            MvNormal(prior_mean, V_prior),   # coefficients of A,B,C,D
+            Normal(ϕ_F, σ_ϕ),               # prior for factor persistence
+            Normal(ϕ_Y, σ_ϕ_Y),               # prior for aggregate persistence
+            LKJCholesky(factor_count + agg_count, corr_Ω_shape),  # prior for factor correlations
+        ]
+
+        # For measurement equation
+        ϕₘ = log(exp(1) - 1) # when softplus applied to it, it should be 1, which is our prior mean on the measures
+        for _ in 1:number_of_dfs
+            for _ in 1:n_objs
+                push!(priors, Normal(ϕₘ, 2)) # was (5,10)
+            end
+        end
+
+        # Add tight priors for the aggregates
+        sigma2_star = 1 / 2000                # series used to construct agg factors
+        phi_Y_star = log(exp(sigma2_star) - 1) # ≈ sigma2_star
+        s_phi_Y = 0.02                      # super-tight
+        for _ in 1:agg_count
+            push!(priors, Normal(phi_Y_star, s_phi_Y))
+        end
+
+        # Pushing hyperpriors to the end of the priors list
+        push!(priors, hyperpriors...)
+
+        # Get initial parameters: Errors
+        Ω_var, Ω_corr, Σ_prior = set_shock_priors(priors, factor_count, agg_count, n_param)
+
+        # Final parameter vector
+        param_vector = [A_prior, B_prior, C_prior, D_prior, Ω_var, Ω_corr, Σ_prior, hyper_params]
+
+        # Getting indices for measurement error
+        meas_ind = extract_meas_ind(estimator, dimension)  # TODO: no need to worry about this
+
+        return Prior(priors, param_vector), meas_ind
     end
-
-    # Add tight priors for the aggregates
-    sigma2_star = 1 / 2000                # series used to construct agg factors
-    phi_Y_star = log(exp(sigma2_star) - 1) # ≈ sigma2_star
-    s_phi_Y = 0.02                      # super-tight
-    for _ in 1:agg_count
-        push!(priors, Normal(phi_Y_star, s_phi_Y))
-    end
-
-    # Pushing hyperpriors to the end of the priors list
-    push!(priors, hyperpriors...)
-
-    # Get initial parameters: Errors
-    Ω_var, Ω_corr, Σ_prior = set_shock_priors(priors, factor_count, agg_count, n_param)
-
-    # Final parameter vector
-    param_vector = [A_prior, B_prior, C_prior, D_prior, Ω_var, Ω_corr, Σ_prior, hyper_params]
-
-    # Getting indices for measurement error 
-    meas_ind = extract_meas_ind(estimator, dimension)  # TODO: no need to worry about this 
-
-    return Prior(priors, param_vector), meas_ind
 end
 
 
@@ -424,7 +494,7 @@ function add_trends(X)
 end
 
 
-function minnesota_prior(minn_params, pcs, controls, lags, estimator)
+function minnesota_prior(minn_params, pcs, controls, lags, estimator; aggregate_rep=:as_states)
     """ Returns priors for A and Q. Treatment from https://documentation.sas.com/doc/en/etsug/15.2/etsug_varmax_details30.htm"""
 
     @unpack grid_pcf, grid_cop = estimator
@@ -443,29 +513,18 @@ function minnesota_prior(minn_params, pcs, controls, lags, estimator)
 
     var_F = VAR_fit(pcs', lags)
     var_Y = VAR_fit(controls', lags)
-    var_Ω = vcat(var_F, var_Y)  # variance of the factors and controls
-
-    # # Create containers for deterministic/control variables 
-    # c = 0
-    # det_mat = zeros(state_count, exo_count + c)
-    # # for k in 1:c
-    # for k in 1:(exo_count+c)
-    #     det_mat[:, k] = [κ_0 * κ_3 * var_Ω[i] for i in 1:state_count]  # this is the variance for the constant for all equations. I've seen 100 * s^2_i also. Essentially a high number will suffice, but with this much data, we take the variance as given
-    # end
+    var_Ω = vcat(var_F, var_Y)  # variance of the factors and controls (needed for scaling in both modes)
 
     # Set mean
     A_mean = diagm([ones(n_factors)..., zeros(n_factors * (lags - 1))...]) .* κ_5
-    B_mean = zeros(n_factors, n_aggs) # β_aggs .* .10 #(sign.(β_aggs) .* abs.(β_aggs).^(1/8)) .* .01 # zeros(state_count, exo_count + c) #.+ β_aggs .* .1
-    C_mean = zeros(n_aggs, n_factors)
-    D_mean = ones(n_aggs) .* κ_6
-    prior_mean = vcat(A_mean[:], B_mean[:], C_mean[:], D_mean[:])
+    B_mean = zeros(n_factors, n_aggs)
 
-    # Prior variance matrix (Minnesota logic) 
+    # Prior variance matrix (Minnesota logic)
     # ----------------   prior variances for endogenous lags   ----------------
     total_state = n_factors + n_aggs
     int_mat = zeros(n_factors, total_state * lags)
 
-    # V_prior for the top half of the matrix
+    # V_prior for the top half of the matrix (A and B blocks)
     for row in 1:n_factors
         s = 1
         for col in 1:(total_state*lags)
@@ -473,51 +532,49 @@ function minnesota_prior(minn_params, pcs, controls, lags, estimator)
             if scaling_factor == 1.0
                 int_mat[row, s:s+lags-1] = [(κ_0 / l^κ_4) for l in 1:lags]
             else
-                # println(scaling_factor)
                 int_mat[row, s:s+lags-1] = [(κ_0 * κ_1 / l^κ_4) * scaling_factor for l in 1:lags]
             end
             s += lags
         end
     end
 
-    # V_prior for C
-    VC_prior = zeros(n_aggs, n_factors)
-    for row in n_factors+1:n_factors+n_aggs
-        s = 1
-        for col in 1:n_factors*lags
-            scaling_factor = var_Ω[row] / var_Ω[col]
-            if scaling_factor == 1.0
-                VC_prior[row-n_factors, s:s+lags-1] = [(κ_0 / l^κ_4) for l in 1:lags]
-            else
-                # println(scaling_factor)
-                VC_prior[row-n_factors, s:s+lags-1] = [(κ_0 * κ_1 / l^κ_4) * scaling_factor for l in 1:lags]
+    if aggregate_rep == :as_inputs
+        # ─── :as_inputs ─── No C, D; prior covers only A, B ─────────────────
+        prior_mean = vcat(A_mean[:], B_mean[:])
+        V_all = vec(int_mat)  # only A, B variance entries
+        V_prior = diagm(V_all)
+
+        return prior_mean, A_mean, B_mean, nothing, nothing, V_prior
+
+    else
+        # ─── :as_states (default) ─── Original behavior with C, D ───────────
+        C_mean = zeros(n_aggs, n_factors)
+        D_mean = ones(n_aggs) .* κ_6
+        prior_mean = vcat(A_mean[:], B_mean[:], C_mean[:], D_mean[:])
+
+        # V_prior for C
+        VC_prior = zeros(n_aggs, n_factors)
+        for row in n_factors+1:n_factors+n_aggs
+            s = 1
+            for col in 1:n_factors*lags
+                scaling_factor = var_Ω[row] / var_Ω[col]
+                if scaling_factor == 1.0
+                    VC_prior[row-n_factors, s:s+lags-1] = [(κ_0 / l^κ_4) for l in 1:lags]
+                else
+                    VC_prior[row-n_factors, s:s+lags-1] = [(κ_0 * κ_1 / l^κ_4) * scaling_factor for l in 1:lags]
+                end
+                s += lags
             end
-            s += lags
         end
+
+        # V_prior just for D
+        # ----------------   prior variances for aggregates   ----------------
+        VD_prior = [κ_0 for _ in 1:n_aggs]
+        V_all = vcat(vec(int_mat), vec(VC_prior), VD_prior)
+        V_prior = diagm(V_all)
+
+        return prior_mean, A_mean, B_mean, C_mean, D_mean, V_prior
     end
-
-    # V_prior just for D
-    # ----------------   prior variances for aggregates   ----------------
-    VD_prior = [κ_0 for _ in 1:n_aggs]
-    V_all = vcat(vec(int_mat), vec(VC_prior), VD_prior)
-    V_prior = diagm(V_all)
-
-    # Create prior variances for control variables 
-    # for row in 1:state_count
-    #     s = c + 1
-    #     for col in s:size(det_mat, 2)  
-    #         scaling_factor           = var_Ω[row] / var_u[col]   
-    #         # println(scaling_factor)
-    #         det_mat[row, s:s+lags-1] = [(κ_0 * κ_2  / (l+1)^κ_4) * scaling_factor for l in 1:lags]    
-    #         s += lags 
-    #     end
-    # end
-
-    # # Set variance 
-    # full_mat = hcat(int_mat, det_mat)  # deterministic/control variables come last 
-    # V_prior = diagm(full_mat[:])
-
-    return prior_mean, A_mean, B_mean, C_mean, D_mean, V_prior
 end
 
 function hyper_prioreval(par, priors)
@@ -544,48 +601,80 @@ function hyper_prioreval(par, priors)
 end
 
 
-function prioreval(par, priors, param_sizes)
-    """Evaluates the parameters at their prior distribution.  
+function prioreval(par, priors, param_sizes; aggregate_rep=:as_states)
+    """Evaluates the parameters at their prior distribution.
 
     p(A, Π) = p(A) * p(Π)
     """
-    nf = param_sizes[1][1]
-    σ²_Ω = diag(par[2])
-    σ²_Ωf = σ²_Ω[1:nf]
-    σ²_Ωy = σ²_Ω[nf+1:end]
-    σ²_Σ = diag(par[4])
 
-    ABCD_cond = all(insupport(priors[1], par[1]))
-    Ωf_cond = all([insupport(priors[2], σ²_Ωf[i]) for i in eachindex(σ²_Ωf)])
-    Ωy_cond = all([insupport(priors[3], σ²_Ωy[i]) for i in eachindex(σ²_Ωy)])
-    Ω_corr_cond = insupport(priors[4], par[3])
-    Σ_cond = all([insupport(priors[4+i], σ²_Σ[i]) for i in eachindex(σ²_Σ)])
+    if aggregate_rep == :as_inputs
+        # ─── :as_inputs ─── No aggregate persistence prior; priors layout:
+        #   [1] MvNormal(AB), [2] Normal(ϕ_F), [3] LKJ(factor_count), [4...] Σ, [end-n_hyper+1:end] hyperpriors
+        σ²_Ω = diag(par[2])     # factor-only Ω variances
+        σ²_Σ = diag(par[4])
 
-    hyper_cond = all([insupport(priors[end-length(par[5])+i], par[5][i]) for i in eachindex(par[5])])
+        AB_cond = all(insupport(priors[1], par[1]))
+        Ωf_cond = all([insupport(priors[2], σ²_Ω[i]) for i in eachindex(σ²_Ω)])
+        Ω_corr_cond = insupport(priors[3], par[3])
+        Σ_cond = all([insupport(priors[3+i], σ²_Σ[i]) for i in eachindex(σ²_Σ)])
+        hyper_cond = all([insupport(priors[end-length(par[5])+i], par[5][i]) for i in eachindex(par[5])])
 
-    if ABCD_cond && Ωf_cond && Ωy_cond && Σ_cond && Ω_corr_cond && hyper_cond
-        # split covariance matrices into standard deviations and correlation matrices
-        log_priorval = 0.0
-        alarm = false
+        if AB_cond && Ωf_cond && Σ_cond && Ω_corr_cond && hyper_cond
+            log_priorval = 0.0
+            alarm = false
 
-        # Log-prior value
-        log_priorval = sum(logpdf(priors[1], par[1]))  # very costly unfortunately
-        log_priorval += sum([logpdf(priors[2], σ²_Ωf[i]) for i in eachindex(σ²_Ωf)])
-        log_priorval += sum([logpdf(priors[3], σ²_Ωy[i]) for i in eachindex(σ²_Ωy)])
-        log_priorval += logpdf(priors[4], par[3])
-        log_priorval += sum([logpdf(priors[4+i], σ²_Σ[i]) for i in eachindex(σ²_Σ)])
+            log_priorval = sum(logpdf(priors[1], par[1]))
+            log_priorval += sum([logpdf(priors[2], σ²_Ω[i]) for i in eachindex(σ²_Ω)])
+            log_priorval += logpdf(priors[3], par[3])
+            log_priorval += sum([logpdf(priors[3+i], σ²_Σ[i]) for i in eachindex(σ²_Σ)])
+            log_priorval += sum([logpdf(priors[end-length(par[5])+i], par[5][i]) for i in eachindex(par[5])])
+        else
+            alarm = true
+            log_priorval = -1.e9
+        end
 
-        # Log-hyperprior value
-        log_priorval += sum([logpdf(priors[end-length(par[5])+i], par[5][i]) for i in eachindex(par[5])])
-
+        return log_priorval, alarm
 
     else
-        # println("not in support")
-        alarm = true
-        log_priorval = -1.e9
-    end
+        # ─── :as_states (default) ─── Original behavior ─────────────────────
+        nf = param_sizes[1][1]
+        σ²_Ω = diag(par[2])
+        σ²_Ωf = σ²_Ω[1:nf]
+        σ²_Ωy = σ²_Ω[nf+1:end]
+        σ²_Σ = diag(par[4])
 
-    return log_priorval, alarm
+        ABCD_cond = all(insupport(priors[1], par[1]))
+        Ωf_cond = all([insupport(priors[2], σ²_Ωf[i]) for i in eachindex(σ²_Ωf)])
+        Ωy_cond = all([insupport(priors[3], σ²_Ωy[i]) for i in eachindex(σ²_Ωy)])
+        Ω_corr_cond = insupport(priors[4], par[3])
+        Σ_cond = all([insupport(priors[4+i], σ²_Σ[i]) for i in eachindex(σ²_Σ)])
+
+        hyper_cond = all([insupport(priors[end-length(par[5])+i], par[5][i]) for i in eachindex(par[5])])
+
+        if ABCD_cond && Ωf_cond && Ωy_cond && Σ_cond && Ω_corr_cond && hyper_cond
+            # split covariance matrices into standard deviations and correlation matrices
+            log_priorval = 0.0
+            alarm = false
+
+            # Log-prior value
+            log_priorval = sum(logpdf(priors[1], par[1]))  # very costly unfortunately
+            log_priorval += sum([logpdf(priors[2], σ²_Ωf[i]) for i in eachindex(σ²_Ωf)])
+            log_priorval += sum([logpdf(priors[3], σ²_Ωy[i]) for i in eachindex(σ²_Ωy)])
+            log_priorval += logpdf(priors[4], par[3])
+            log_priorval += sum([logpdf(priors[4+i], σ²_Σ[i]) for i in eachindex(σ²_Σ)])
+
+            # Log-hyperprior value
+            log_priorval += sum([logpdf(priors[end-length(par[5])+i], par[5][i]) for i in eachindex(par[5])])
+
+
+        else
+            # println("not in support")
+            alarm = true
+            log_priorval = -1.e9
+        end
+
+        return log_priorval, alarm
+    end
 end
 
 

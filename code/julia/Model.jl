@@ -225,40 +225,69 @@ function define_parameter_space(model_elements, model_options, prior_objects)
     @unpack n_less_than_one, MV, agg_count = model_elements
     @unpack grid_cop, grid_pcf = estimator
 
-    A = param_vector[1]
-    B = param_vector[2]
-    C = param_vector[3]
-    D = param_vector[4] # already a vector
-    Ω_var = param_vector[5] # a vector
-    Ω_corr_vec = param_vector[6] # vector of non-diagonal elements of actual Ω_corr
-    Σ = diag(param_vector[7])
-    H = param_vector[8] # hyperparameters
+    aggregate_rep = hasproperty(model_options, :aggregate_rep) ? model_options.aggregate_rep : :as_states
 
-    # Set elements in Σ to NaN if the measure is never observed 
-    Σ_ids = Float64.(collect(1:length(Σ)))
-
+    # Set elements in Σ to NaN if the measure is never observed
     dim = length(measures)
     cop_part, imm_part = retrieve_cop_and_imm_part(estimator, dim)
     cop_id = cop_part - imm_part
 
-    # Returns NaNs in Σ_ids if the object is never observed
-    find_observed_objects!(estimator, Σ_ids, MV, cop_id, measures)
+    if aggregate_rep == :as_inputs
+        # ─── :as_inputs ─── 6-block layout: [A, B, Ω_var, Ω_corr, Σ, H] ────
+        A = param_vector[1]
+        B = param_vector[2]
+        Ω_var = param_vector[3]          # factor-only
+        Ω_corr_vec = param_vector[4]     # factor-only correlations
+        Σ = diag(param_vector[5])        # no aggregate measurement errors
+        H = param_vector[6]             # 4 hyperparameters
 
-    # Subset to observed objects 
-    cond = findall(!isnan, Σ_ids)
-    short_Σ = Σ[cond]
+        Σ_ids = Float64.(collect(1:length(Σ)))
+        find_observed_objects!(estimator, Σ_ids, MV, cop_id, measures)
 
-    new_param_sizes = Vector(undef, length(param_vector))
-    for (m, mat) in enumerate([A, B, C, D, Ω_var, Ω_corr_vec, short_Σ, H])
-        new_param_sizes[m] = size(mat)
+        cond = findall(!isnan, Σ_ids)
+        short_Σ = Σ[cond]
+
+        new_param_sizes = Vector(undef, 6)
+        for (m, mat) in enumerate([A, B, Ω_var, Ω_corr_vec, short_Σ, H])
+            new_param_sizes[m] = size(mat)
+        end
+
+        # priors layout: [1]=MvNormal(AB), [2]=Normal(ϕ_F), [3]=LKJ, [4...]=measurement, [end-3:end]=hyperpriors
+        n_hyper = length(H)
+        priors = [priors[1], priors[2], priors[3], priors[3 .+ cond]..., priors[end-n_hyper+1:end]...]
+
+        return [A[:]; B[:]; Ω_var; Ω_corr_vec; short_Σ[:]; H], new_param_sizes, Σ_ids, priors
+
+    else
+        # ─── :as_states (default) ─── 8-block layout: [A, B, C, D, Ω_var, Ω_corr, Σ, H] ─
+        A = param_vector[1]
+        B = param_vector[2]
+        C = param_vector[3]
+        D = param_vector[4] # already a vector
+        Ω_var = param_vector[5] # a vector
+        Ω_corr_vec = param_vector[6] # vector of non-diagonal elements of actual Ω_corr
+        Σ = diag(param_vector[7])
+        H = param_vector[8] # hyperparameters
+
+        Σ_ids = Float64.(collect(1:length(Σ)))
+        find_observed_objects!(estimator, Σ_ids, MV, cop_id, measures)
+
+        # Subset to observed objects
+        cond = findall(!isnan, Σ_ids)
+        short_Σ = Σ[cond]
+
+        new_param_sizes = Vector(undef, length(param_vector))
+        for (m, mat) in enumerate([A, B, C, D, Ω_var, Ω_corr_vec, short_Σ, H])
+            new_param_sizes[m] = size(mat)
+        end
+
+        # Remove elements from the vector of priors that we don't want to estimate
+        # priors = [priors[1], priors[2], priors[3], priors[3 .+ cond]...]
+        priors = [priors[1], priors[2], priors[3], priors[4], priors[4 .+ cond]..., priors[end-5:end]...] # keep hyperpriors
+
+        # return [A[:]; B[:]; C[:]; D[:]; Ω[:]; short_Σ[:]], new_param_sizes, Σ_ids, priors # [lb, ub]
+        return [A[:]; B[:]; C[:]; D[:]; Ω_var; Ω_corr_vec; short_Σ[:]; H], new_param_sizes, Σ_ids, priors # [lb, ub]
     end
-
-    # Remove elements from the vector of priors that we don't want to estimate
-    # priors = [priors[1], priors[2], priors[3], priors[3 .+ cond]...]
-    priors = [priors[1], priors[2], priors[3], priors[4], priors[4 .+ cond]..., priors[end-5:end]...] # keep hyperpriors
-
-    # return [A[:]; B[:]; C[:]; D[:]; Ω[:]; short_Σ[:]], new_param_sizes, Σ_ids, priors # [lb, ub]
-    return [A[:]; B[:]; C[:]; D[:]; Ω_var; Ω_corr_vec; short_Σ[:]; H], new_param_sizes, Σ_ids, priors # [lb, ub]
 end
 
 
@@ -375,48 +404,74 @@ end
 
 
 
-function matrisize(param_vector, param_sizes)
+function matrisize(param_vector, param_sizes; aggregate_rep=:as_states)
     # For gregors implementation, it requires an nx1 matrix vs. a vec
     param_vector = reshape(param_vector, length(param_vector))
-    # n_aggs = length(param_sizes[3])  # number of aggregates
 
-    A = zeros(param_sizes[1][1], param_sizes[1][1])
-    B = zeros(param_sizes[2][1], param_sizes[2][2])
-    C = zeros(param_sizes[3][1], param_sizes[3][2])
-    D = zeros(param_sizes[4][1], param_sizes[4][1])
-    # Ω = zeros(eltype(param_vector), param_sizes[5][1], param_sizes[5][1])
-    Ω_var = zeros(param_sizes[5][1], param_sizes[5][1])
-    # Ω_corr = zeros(param_sizes[5][1], param_sizes[5][1])
-    Σ = zeros(param_sizes[7][1], param_sizes[7][1])
+    if aggregate_rep == :as_inputs
+        # ─── :as_inputs ─── 6-block layout: [A, B, Ω_var, Ω_corr, Σ] (no C, D, no H) ────
+        A = zeros(param_sizes[1][1], param_sizes[1][1])
+        B = zeros(param_sizes[2][1], param_sizes[2][2])
+        Ω_var = zeros(param_sizes[3][1], param_sizes[3][1])
+        Σ = zeros(param_sizes[5][1], param_sizes[5][1])
 
-    l_A = length(A)
-    l_B = length(B)
-    l_AB = l_A + l_B
-    l_C = length(C)
-    l_D = param_sizes[4][1]
-    l_ABC = l_AB + l_C
-    l_ABCD = l_ABC + l_D
-    l_Ω_var = param_sizes[5][1]
-    l_Ω_corr = param_sizes[6][1]  # number of free elements in lower triangular matrix
-    l_Ω = l_Ω_var + l_Ω_corr
+        l_A = length(A)
+        l_B = prod(param_sizes[2])
+        l_AB = l_A + l_B
+        l_Ω_var = param_sizes[3][1]
+        l_Ω_corr = param_sizes[4][1]  # number of free elements in lower triangular
+        l_Ω = l_Ω_var + l_Ω_corr
 
-    # Change parameter space based on :case
-    A .= reshape(view(param_vector, 1:l_A), param_sizes[1])
-    B .= reshape(view(param_vector, 1+l_A:l_AB), param_sizes[2])
-    C .= reshape(view(param_vector, 1+l_AB:l_ABC), param_sizes[3])
-    D .= diagm(view(param_vector, 1+l_ABC:l_ABCD))
-    # Ω .= diagm(view(param_vector, 1+l_ABC+param_sizes[4][1]+1:1+l_ABC+param_sizes[4][1]+param_sizes[5][1]))
-    Ω_var .= diagm(reshape(view(param_vector, 1+l_ABCD:l_ABCD+l_Ω_var), l_Ω_var))
-    Ω_corr = u_to_Lcorr(view(param_vector, 1+l_ABCD+l_Ω_var:l_ABCD+l_Ω_var+l_Ω_corr), param_sizes[5][1]) # maps also "u" to (-1,1)
+        A .= reshape(view(param_vector, 1:l_A), param_sizes[1])
+        B .= reshape(view(param_vector, 1+l_A:l_AB), param_sizes[2])
+        Ω_var .= diagm(reshape(view(param_vector, 1+l_AB:l_AB+l_Ω_var), l_Ω_var))
+        Ω_corr = u_to_Lcorr(view(param_vector, 1+l_AB+l_Ω_var:l_AB+l_Ω_var+l_Ω_corr), param_sizes[3][1])
+        Σ .= diagm(view(param_vector, l_AB+l_Ω+1:length(param_vector)))
 
-    # Ω .= Ω_var * Ω_corr * Ω_var
+        return A, B, nothing, nothing, Ω_var, Ω_corr, Hermitian(Σ)
 
-    # Creating Σ, adding zeros for aggregates (perfectly measured)
-    # Σ_vec = vcat(view(param_vector, length(A)+length(B)+param_sizes[3][1]+param_sizes[4][1]+1:length(param_vector)), zeros(n_aggs))
-    Σ .= diagm(view(param_vector, l_ABCD+l_Ω+1:length(param_vector)))
+    else
+        # ─── :as_states (default) ─── 8-block layout ────────────────────────
+        # n_aggs = length(param_sizes[3])  # number of aggregates
 
-    # return A, B, C, D, Hermitian(Ω), Hermitian(Σ)  # they need to be positive semi-def. 
-    return A, B, C, D, Ω_var, Ω_corr, Hermitian(Σ)  # they need to be positive semi-def. 
+        A = zeros(param_sizes[1][1], param_sizes[1][1])
+        B = zeros(param_sizes[2][1], param_sizes[2][2])
+        C = zeros(param_sizes[3][1], param_sizes[3][2])
+        D = zeros(param_sizes[4][1], param_sizes[4][1])
+        # Ω = zeros(eltype(param_vector), param_sizes[5][1], param_sizes[5][1])
+        Ω_var = zeros(param_sizes[5][1], param_sizes[5][1])
+        # Ω_corr = zeros(param_sizes[5][1], param_sizes[5][1])
+        Σ = zeros(param_sizes[7][1], param_sizes[7][1])
+
+        l_A = length(A)
+        l_B = length(B)
+        l_AB = l_A + l_B
+        l_C = length(C)
+        l_D = param_sizes[4][1]
+        l_ABC = l_AB + l_C
+        l_ABCD = l_ABC + l_D
+        l_Ω_var = param_sizes[5][1]
+        l_Ω_corr = param_sizes[6][1]  # number of free elements in lower triangular matrix
+        l_Ω = l_Ω_var + l_Ω_corr
+
+        # Change parameter space based on :case
+        A .= reshape(view(param_vector, 1:l_A), param_sizes[1])
+        B .= reshape(view(param_vector, 1+l_A:l_AB), param_sizes[2])
+        C .= reshape(view(param_vector, 1+l_AB:l_ABC), param_sizes[3])
+        D .= diagm(view(param_vector, 1+l_ABC:l_ABCD))
+        # Ω .= diagm(view(param_vector, 1+l_ABC+param_sizes[4][1]+1:1+l_ABC+param_sizes[4][1]+param_sizes[5][1]))
+        Ω_var .= diagm(reshape(view(param_vector, 1+l_ABCD:l_ABCD+l_Ω_var), l_Ω_var))
+        Ω_corr = u_to_Lcorr(view(param_vector, 1+l_ABCD+l_Ω_var:l_ABCD+l_Ω_var+l_Ω_corr), param_sizes[5][1]) # maps also "u" to (-1,1)
+
+        # Ω .= Ω_var * Ω_corr * Ω_var
+
+        # Creating Σ, adding zeros for aggregates (perfectly measured)
+        # Σ_vec = vcat(view(param_vector, length(A)+length(B)+param_sizes[3][1]+param_sizes[4][1]+1:length(param_vector)), zeros(n_aggs))
+        Σ .= diagm(view(param_vector, l_ABCD+l_Ω+1:length(param_vector)))
+
+        # return A, B, C, D, Hermitian(Ω), Hermitian(Σ)  # they need to be positive semi-def.
+        return A, B, C, D, Ω_var, Ω_corr, Hermitian(Σ)  # they need to be positive semi-def.
+    end
 end
 
 
@@ -440,76 +495,118 @@ end
 function get_priors(model_elements, model_options, hyper_params)
     """Generates the prior distributions for the parameters."""
 
-    # Define hyperpriors 
+    # Define hyperpriors
     @unpack agg_count, factor_count, pcs, u, MV, proj = model_elements
     @unpack estimator, measures, constant, lags, prior, measurement_error, estimation_object, case, errors_process, pre_multiply = model_options
     @unpack grid_pcf, grid_cop = estimator
     @unpack hyperparameters = prior
 
+    aggregate_rep = hasproperty(model_options, :aggregate_rep) ? model_options.aggregate_rep : :as_states
+
     number_of_dfs = length(MV)
     dimension = length(measures)
 
-    # Map hyperparameters to within their Bounds
-    # 1. First parameter (e.g., ρ_var) constrained to [0.2, 0.99]
-    hyper_params[1] = inv_logit(hyper_params[1], 0.2, 0.99)
+    if aggregate_rep == :as_inputs
+        # ─── :as_inputs ─── 4 hyperparameters: κ_1, κ_5, σ_ϕ, ν ────────────
+        hyper_params[1] = inv_logit(hyper_params[1], 0.2, 0.99)   # κ_1
+        hyper_params[2] = inv_logit(hyper_params[2], -0.99, 0.99)  # κ_5
 
-    # 2. Second parameter (e.g., ρ_pers_state) constrained to [-0.99, 0.99]
-    hyper_params[2] = inv_logit(hyper_params[2], -0.99, 0.99)
+        hyperparameters[1] = 0.05
+        hyperparameters[2] = hyper_params[1]
+        hyperparameters[6] = hyper_params[2]
 
-    # 3. Third parameter (e.g., ρ_pers_agg) constrained to [-0.99, 0.99]
-    hyper_params[3] = inv_logit(hyper_params[3], -0.99, 0.99)
+        prior_mean, _, _, _, _, V_prior = minnesota_prior(hyperparameters, pcs, u, lags, estimator; aggregate_rep=:as_inputs)
 
+        n_objs = (dimension + 1)
 
-    # Replace hyperparameters
-    hyperparameters[1] = 0.05
-    hyperparameters[2] = hyper_params[1]
-    hyperparameters[6] = hyper_params[2]
-    hyperparameters[7] = hyper_params[3]
+        ρ_F = hyperparameters[6]
+        ϕ_F = log(exp(1 - ρ_F^2) - 1)
 
-    # Construct prior hyperparameters
-    prior_mean, _, _, _, _, V_prior = minnesota_prior(hyperparameters, pcs, u, lags, estimator)  # TODO: assumes aggs only have 1 lag
+        σ_ϕ = log(exp(hyper_params[3]) + 1)
+        corr_Ω_shape = 1 + log(1 + exp(hyper_params[4]))
 
-    # For measurement error
-    n_objs = (dimension + 1)
+        priors = [
+            MvNormal(prior_mean, V_prior),           # [1] coefficients of A,B
+            Normal(ϕ_F, σ_ϕ),                        # [2] prior for factor persistence
+            LKJCholesky(factor_count, corr_Ω_shape),  # [3] factor-only correlations
+        ]
 
-    # ───  Extract the two persistence hyper-parameters  ─────────────────────────
-    ρ_F = hyperparameters[6]        # κ₅  = persistence target for the  r-factor block
-    ρ_Y = hyperparameters[7]        # κ₆  = persistence target for the  q-aggregate block
-
-    #  Same log-transform you already used for ρ_F, now applied to both blocks
-    ϕ_F = log(exp(1 - ρ_F^2) - 1)    # ⇒ Normal prior on ϕ_F  implies Beta prior on ρ_F
-    ϕ_Y = log(exp(1 - ρ_Y^2) - 1)    # ⇒ identical mapping for the aggregate persistence
-
-    # ───  Prior list  ──────────────────────────────────────────────────────────
-    σ_ϕ = log(exp(hyper_params[4]) + 1) # These are already corrected
-    σ_ϕ_Y = log(exp(hyper_params[5]) + 1)
-
-    corr_Ω_shape = 1 + log(1 + exp(hyper_params[6])) # shape parameter of 2, meaning mild prior towards identity matrix
-
-    priors = [
-        MvNormal(prior_mean, V_prior),   # coefficients of A,B,C,D
-        Normal(ϕ_F, σ_ϕ),               # prior for factor persistence
-        Normal(ϕ_Y, σ_ϕ_Y),               # prior for aggregate persistence
-        LKJCholesky(factor_count + agg_count, corr_Ω_shape),  # prior for factor correlations
-    ]
-
-    # For measurement equation
-    ϕₘ = log(exp(1) - 1) # when softplus applied to it, it should be 1, which is our prior mean on the measures
-    for _ in 1:number_of_dfs
-        for _ in 1:n_objs
-            push!(priors, Normal(ϕₘ, 2)) # was (5,10)
+        ϕₘ = log(exp(1) - 1)
+        for _ in 1:number_of_dfs
+            for _ in 1:n_objs
+                push!(priors, Normal(ϕₘ, 2))
+            end
         end
-    end
 
-    # Add tight priors for the aggregates
-    sigma2_star = 1 / 2000                # series used to construct agg factors
-    phi_Y_star = log(exp(sigma2_star) - 1) # ≈ sigma2_star
-    s_phi_Y = 0.02                      # super-tight
-    for _ in 1:agg_count
-        push!(priors, Normal(phi_Y_star, s_phi_Y))
-    end
+        # No aggregate measurement error priors
 
-    return priors
+        return priors
+
+    else
+        # ─── :as_states (default) ─── 6 hyperparameters ─────────────────────
+
+        # Map hyperparameters to within their Bounds
+        # 1. First parameter (e.g., ρ_var) constrained to [0.2, 0.99]
+        hyper_params[1] = inv_logit(hyper_params[1], 0.2, 0.99)
+
+        # 2. Second parameter (e.g., ρ_pers_state) constrained to [-0.99, 0.99]
+        hyper_params[2] = inv_logit(hyper_params[2], -0.99, 0.99)
+
+        # 3. Third parameter (e.g., ρ_pers_agg) constrained to [-0.99, 0.99]
+        hyper_params[3] = inv_logit(hyper_params[3], -0.99, 0.99)
+
+
+        # Replace hyperparameters
+        hyperparameters[1] = 0.05
+        hyperparameters[2] = hyper_params[1]
+        hyperparameters[6] = hyper_params[2]
+        hyperparameters[7] = hyper_params[3]
+
+        # Construct prior hyperparameters
+        prior_mean, _, _, _, _, V_prior = minnesota_prior(hyperparameters, pcs, u, lags, estimator)  # TODO: assumes aggs only have 1 lag
+
+        # For measurement error
+        n_objs = (dimension + 1)
+
+        # ───  Extract the two persistence hyper-parameters  ─────────────────────────
+        ρ_F = hyperparameters[6]        # κ₅  = persistence target for the  r-factor block
+        ρ_Y = hyperparameters[7]        # κ₆  = persistence target for the  q-aggregate block
+
+        #  Same log-transform you already used for ρ_F, now applied to both blocks
+        ϕ_F = log(exp(1 - ρ_F^2) - 1)    # ⇒ Normal prior on ϕ_F  implies Beta prior on ρ_F
+        ϕ_Y = log(exp(1 - ρ_Y^2) - 1)    # ⇒ identical mapping for the aggregate persistence
+
+        # ───  Prior list  ──────────────────────────────────────────────────────────
+        σ_ϕ = log(exp(hyper_params[4]) + 1) # These are already corrected
+        σ_ϕ_Y = log(exp(hyper_params[5]) + 1)
+
+        corr_Ω_shape = 1 + log(1 + exp(hyper_params[6])) # shape parameter of 2, meaning mild prior towards identity matrix
+
+        priors = [
+            MvNormal(prior_mean, V_prior),   # coefficients of A,B,C,D
+            Normal(ϕ_F, σ_ϕ),               # prior for factor persistence
+            Normal(ϕ_Y, σ_ϕ_Y),               # prior for aggregate persistence
+            LKJCholesky(factor_count + agg_count, corr_Ω_shape),  # prior for factor correlations
+        ]
+
+        # For measurement equation
+        ϕₘ = log(exp(1) - 1) # when softplus applied to it, it should be 1, which is our prior mean on the measures
+        for _ in 1:number_of_dfs
+            for _ in 1:n_objs
+                push!(priors, Normal(ϕₘ, 2)) # was (5,10)
+            end
+        end
+
+        # Add tight priors for the aggregates
+        sigma2_star = 1 / 2000                # series used to construct agg factors
+        phi_Y_star = log(exp(sigma2_star) - 1) # ≈ sigma2_star
+        s_phi_Y = 0.02                      # super-tight
+        for _ in 1:agg_count
+            push!(priors, Normal(phi_Y_star, s_phi_Y))
+        end
+
+        return priors
+    end
 end
 
 # Apply the inverse logit transformation to get the constrained values (ρ*)
@@ -530,9 +627,12 @@ function likeli(model_elements, param_vector, param_sizes, hyperpriors, Σ_ids, 
     @unpack number_of_dfs = model_options
     @unpack y, G, u, agg_count = model_elements
 
-    # Set Priors
-    hyper_params = param_vector[end-5:end] #TODO: hardcoded
-    other_params = param_vector[1:end-6]
+    aggregate_rep = hasproperty(model_options, :aggregate_rep) ? model_options.aggregate_rep : :as_states
+
+    # Set Priors — dynamic hyperparameter count based on param_sizes
+    n_hyper = param_sizes[end][1]
+    hyper_params = param_vector[end-n_hyper+1:end]
+    other_params = param_vector[1:end-n_hyper]
 
     # Priors change based on the hyper_params --- hyperpriors do not
     local priors
@@ -546,10 +646,14 @@ function likeli(model_elements, param_vector, param_sizes, hyperpriors, Σ_ids, 
     push!(priors, hyperpriors...)
 
     # Reshape param_vector into matrices
-    A, B, C, D, Ω_var, Ω_corr, Σ = matrisize(other_params, param_sizes)
+    A, B, C, D, Ω_var, Ω_corr, Σ = matrisize(other_params, param_sizes; aggregate_rep=aggregate_rep)
 
     # Reparametization
-    log_P, alarm = prioreval([[A..., B..., C..., diag(D)...], Ω_var, Ω_corr, Matrix(Σ), hyper_params], priors, param_sizes)
+    if aggregate_rep == :as_inputs
+        log_P, alarm = prioreval([[A..., B...], Ω_var, Ω_corr, Matrix(Σ), hyper_params], priors, param_sizes; aggregate_rep=:as_inputs)
+    else
+        log_P, alarm = prioreval([[A..., B..., C..., diag(D)...], Ω_var, Ω_corr, Matrix(Σ), hyper_params], priors, param_sizes)
+    end
     Ω_var[diagind(Ω_var)] = log.(exp.(Ω_var[diagind(Ω_var)]) .+ 1)  # softplus transformation
 
     # Convert Cholesky factor to correlation matrix
@@ -567,9 +671,36 @@ function likeli(model_elements, param_vector, param_sizes, hyperpriors, Σ_ids, 
         return tot_log_like, alarm
     end
 
-    # Expand to comformable Σ if necessary 
+    if aggregate_rep == :as_inputs
+        # ─── :as_inputs ─── Ω is factor-only; aggregates are exogenous inputs ──
+        Σ = apply_measurement_criteria(Σ, Σ_ids, model_options, 0)  # agg_count=0 for measurement
 
-    # TODO: IF WE STOP USING SEQUENTIAL, THEN WE HAVE TO UNDO THE DIAG AND CORRECT THE BUTTERFLY EFFECT 
+        # Transform parameters related to Σ
+        cond = Σ .> 10
+        Σ[.!cond] .= log.(exp.(Σ[.!cond]) .+ 1)
+
+        Ω_f = Ω  # entire Ω is factor-only
+
+        if smooth
+            smoother_output, log_D, alarm = recurse_kalman_filter_smoother_inputs(A, B, Ω_f, Σ, G, y, u)
+            tot_log_like = log_P + log_D
+            return smoother_output, tot_log_like, alarm
+        else
+            local log_D, alarm
+            try
+                log_D, alarm = recurse_kalman_filter_forward_inputs(A, B, Ω_f, Σ, G, y, u)
+            catch e
+                log_D = -1.e12
+                alarm = true
+            end
+            tot_log_like = log_P + log_D
+            return tot_log_like, alarm
+        end
+    end
+
+    # Expand to comformable Σ if necessary
+
+    # TODO: IF WE STOP USING SEQUENTIAL, THEN WE HAVE TO UNDO THE DIAG AND CORRECT THE BUTTERFLY EFFECT
     Σ = apply_measurement_criteria(Σ, Σ_ids, model_options, agg_count)
 
     # Transform parameters related to Σ
@@ -886,6 +1017,165 @@ function recurse_kalman_filter_forward(A, B, C, D, Ω_f, Ω_y, Σ, G, y)
 end
 
 
+# ═══════════════════════════════════════════════════════════════════════════════
+#  :as_inputs Kalman filters — aggregates as exogenous inputs, state = factors only
+# ═══════════════════════════════════════════════════════════════════════════════
+
+function recurse_kalman_filter_smoother_inputs(A, B_input, Ω_f, Σ, G, y, u)
+    """Kalman filter-smoother for :as_inputs mode.
+    State = [F_t; F_{t-1}; F_{t-2}; F_{t-3}] (4r × 1), no aggregate states.
+    Prediction: x_pred = L * x̂ + E * u_t  where u_t are observed aggregates.
+    """
+    T = size(y, 2)
+    r = size(A, 1)
+    q = size(B_input, 2)
+    nₛ = 4r
+    Tval = eltype(A)
+
+    # --------- constant matrices ------------------------------------
+    AI = Matrix{Tval}(I, r, r)
+
+    L = zeros(Tval, nₛ, nₛ)
+    @views begin
+        L[1:r, 1:r] .= A
+        L[r+1:2r, 1:r] .= AI
+        L[2r+1:3r, r+1:2r] .= AI
+        L[3r+1:4r, 2r+1:3r] .= AI
+    end
+    Lᵀ = transpose(L)
+
+    # Exogenous input matrix E (4r × q): only factors load on aggregates
+    E = zeros(Tval, nₛ, q)
+    E[1:r, :] .= B_input
+
+    bigΩ = zeros(Tval, nₛ, nₛ)
+    bigΩ[1:r, 1:r] .= Ω_f
+
+    # --------- initial prior ----------------------------------------
+    Pcore = lyapd(A, Ω_f)
+    P_F = zeros(Tval, nₛ, nₛ)
+    P_F[1:r, 1:r] .= Pcore
+    P_F[diagind(P_F)[r+1:4r]] .= 1e6
+
+    # Filtered containers
+    x_filtered = zeros(Tval, nₛ, T)
+    sigma_filtered = [zeros(Tval, nₛ, nₛ) for _ in 1:T]
+
+    # Updated containers
+    x_updated = zeros(Tval, nₛ, T)
+    sigma_updated = [zeros(Tval, nₛ, nₛ) for _ in 1:T]
+
+    # Containers for factors
+    x̂ = zeros(Tval, nₛ)
+    x_filtered_factors = zeros(Tval, nₛ)
+
+    # Containers for sigma
+    sigma_filtered_r = Matrix{Tval}(undef, nₛ, nₛ)
+    sigma_filtered_l = Matrix{Tval}(undef, nₛ, nₛ)
+
+    # Exogenous input buffer
+    Eu = zeros(Tval, nₛ)
+
+    # Model Likelihood
+    logL = 0.0
+
+    for t = 1:T
+        # Prediction step: x_pred = L * x̂ + E * u_t
+        mul!(x_filtered_factors, L, x̂)
+        mul!(Eu, E, view(u, :, t))
+        x_filtered_factors .+= Eu
+        x_filtered[:, t] .= x_filtered_factors
+
+        mul!(sigma_filtered_r, P_F, Lᵀ)
+        mul!(sigma_filtered_l, L, sigma_filtered_r)
+        sigma_filtered[t] .= sigma_filtered_l .+ bigΩ
+
+        # Update step
+        logL += @views kalman_update!(x_updated, sigma_updated, y[:, t], t, G[t], x_filtered[:, t], sigma_filtered[t], Σ)
+
+        # Update priors
+        copyto!(P_F, sigma_updated[t])
+        copy!(x̂, x_updated[:, t])
+    end
+
+    alarm = logL <= -1.e12
+
+    smoother_results = run_smoother(L, x_filtered, sigma_filtered, x_updated, sigma_updated, T; E=E, u=u)
+    return smoother_results, logL, alarm
+end
+
+
+function recurse_kalman_filter_forward_inputs(A, B_input, Ω_f, Σ, G, y, u)
+    """Forward-only Kalman filter for :as_inputs mode (no smoother).
+    State = [F_t; F_{t-1}; F_{t-2}; F_{t-3}] (4r × 1).
+    """
+    T = size(y, 2)
+    r = size(A, 1)
+    q = size(B_input, 2)
+    nₛ = 4r
+    Tval = eltype(A)
+
+    # --------- constant matrices ------------------------------------
+    AI = Matrix{Tval}(I, r, r)
+
+    L = zeros(Tval, nₛ, nₛ)
+    @views begin
+        L[1:r, 1:r] .= A
+        L[r+1:2r, 1:r] .= AI
+        L[2r+1:3r, r+1:2r] .= AI
+        L[3r+1:4r, 2r+1:3r] .= AI
+    end
+    Lᵀ = transpose(L)
+
+    E = zeros(Tval, nₛ, q)
+    E[1:r, :] .= B_input
+
+    bigΩ = zeros(Tval, nₛ, nₛ)
+    bigΩ[1:r, 1:r] .= Ω_f
+
+    # --------- initial prior ----------------------------------------
+    Pcore = lyapd(A, Ω_f)
+    P_F = zeros(Tval, nₛ, nₛ)
+    P_F[1:r, 1:r] .= Pcore
+    P_F[diagind(P_F)[r+1:4r]] .= 1e6
+
+    # --------- work buffers -----------------------------------------
+    x̂ = zeros(Tval, nₛ)
+    x_pred = similar(x̂)
+    σ_r = similar(P_F)
+    σ_pred = similar(P_F)
+    x_tmp = similar(x̂)
+    σ_tmp = similar(P_F)
+    Eu = zeros(Tval, nₛ)
+    ws = KalmanWorkspace(nₛ, Tval)
+
+    # --------- main loop --------------------------------------------
+    logL = zero(Tval)
+
+    @inbounds for t = 1:T
+        mul!(x_pred, L, x̂)
+        mul!(Eu, E, view(u, :, t))
+        x_pred .+= Eu
+
+        mul!(σ_r, P_F, Lᵀ)
+        mul!(σ_pred, L, σ_r)
+        BLAS.axpy!(1.0, bigΩ, σ_pred)
+
+        y_col = @view y[:, t]
+        G_t = G[t]
+
+        logL += kalman_update_fast!(
+            x_tmp, σ_tmp, y_col, G_t,
+            x_pred, σ_pred, Σ, ws)
+
+        copy!(x̂, x_tmp)
+        copy!(P_F, σ_tmp)
+    end
+
+    alarm = logL <= -1e12
+    return logL, alarm
+end
+
 
 function save_estimates!(P_F, x̂, sigma_updated, x_updated)
     P_F .= sigma_updated[:, :, t]
@@ -1021,7 +1311,7 @@ end
 
 
 
-function run_smoother(L, x_filtered, sigma_filtered, x_updated, sigma_updated, T)
+function run_smoother(L, x_filtered, sigma_filtered, x_updated, sigma_updated, T; E=nothing, u=nothing)
     x_smoothed = copy(x_updated)
     sigma_smoothed = copy(sigma_updated)
     dε_smoothed = zeros(size(x_filtered))
@@ -1030,7 +1320,7 @@ function run_smoother(L, x_filtered, sigma_filtered, x_updated, sigma_updated, T
 
     for t in (T-1):-1:1
         x_smoothed[:, t], sigma_smoothed[t], cross_covariances[t] = perform_backward_pass(L,
-            sigma_filtered[t+1], # was: sigma_updated[:, :, t], 
+            sigma_filtered[t+1], # was: sigma_updated[:, :, t],
             sigma_updated[t],
             x_updated[:, t],
             x_smoothed[:, t+1],
@@ -1043,7 +1333,12 @@ function run_smoother(L, x_filtered, sigma_filtered, x_updated, sigma_updated, T
     # Initial difference
     dε_smoothed[:, 1] = x_smoothed[:, 1] - x_filtered[:, 1]
     for t in 2:T
-        dε_smoothed[:, t] = x_smoothed[:, t] - L * x_smoothed[:, t-1] # - B * u[:, t]
+        if E !== nothing && u !== nothing
+            # :as_inputs — subtract exogenous input E * u_t to recover structural shocks
+            dε_smoothed[:, t] = x_smoothed[:, t] - L * x_smoothed[:, t-1] - E * view(u, :, t)
+        else
+            dε_smoothed[:, t] = x_smoothed[:, t] - L * x_smoothed[:, t-1] # - B * u[:, t]
+        end
     end
 
     return SmootherResults(x_filtered, sigma_filtered, x_updated, sigma_updated, x_smoothed, sigma_smoothed, cross_covariances, dε_smoothed)

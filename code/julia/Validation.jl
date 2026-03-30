@@ -435,6 +435,123 @@ function generate_wealth_by_income_df(source, ty, measures, opttag, gdp_series, 
 end
 
 
+"""
+    weighted_conditional_bin_means_simple(outcome, conditioning, w, shares)
+
+Compute weighted mean of `outcome` for observations in share-defined groups of
+`conditioning`.  Simplified version for sample micro data (plain vectors).
+"""
+function weighted_conditional_bin_means_simple(
+    outcome::AbstractVector,
+    conditioning::AbstractVector,
+    w::AbstractVector,
+    shares::AbstractVector{<:Real},
+)
+    @assert length(outcome) == length(conditioning) == length(w)
+    n = length(shares)
+    totw = sum(w)
+    totw > 0 || return fill(NaN, n)
+
+    ix = sortperm(conditioning)
+    ws = w[ix]
+    os = outcome[ix]
+
+    targets = Float64.(shares) .* totw
+    num = zeros(Float64, n)
+    den = zeros(Float64, n)
+
+    bin = 1
+    filled = 0.0
+    tol = 1e-14 * totw
+
+    @inbounds for i in eachindex(os)
+        wi = ws[i]
+        oi = os[i]
+        wi <= 0 && continue
+        while wi > 0 && bin <= n
+            rem = targets[bin] - filled
+            if rem <= tol
+                bin += 1
+                filled = 0.0
+                continue
+            end
+            take = min(wi, rem)
+            num[bin] += oi * take
+            den[bin] += take
+            wi -= take
+            filled += take
+            if filled >= targets[bin] - tol
+                bin += 1
+                filled = 0.0
+            end
+        end
+    end
+
+    means = fill(NaN, n)
+    @inbounds for b = 1:n
+        means[b] = den[b] > 0 ? num[b] / den[b] : NaN
+    end
+    return means
+end
+
+
+"""
+    compute_sample_cross_conditional(sample_csv_path, outcome_var, conditioning_var; shares)
+
+Compute cross-conditional share-group means from a sample micro CSV.
+Returns a DataFrame with time and columns like `<outcome>_by_<conditioning>_bot50`, etc.,
+or `nothing` if the required variables are not present in the sample.
+"""
+function compute_sample_cross_conditional(
+    sample_csv_path::String,
+    outcome_var::String,
+    conditioning_var::String;
+    shares = [0.5, 0.4, 0.1]
+)
+    df = CSV.read(sample_csv_path, DataFrame)
+    # Check both variables exist
+    if !(Symbol(outcome_var) in propertynames(df)) ||
+       !(Symbol(conditioning_var) in propertynames(df))
+        return nothing
+    end
+
+    df[!, :time] = QuarterlyDate.(df[!, :time])
+    dates = sort(unique(df.time))
+
+    # Share labels
+    cum = 0.0
+    labels = String[]
+    for (i, s) in enumerate(shares)
+        pct = round(Int, s * 100)
+        if i == 1
+            push!(labels, "bot$(pct)")
+        elseif i == length(shares)
+            push!(labels, "top$(pct)")
+        else
+            push!(labels, "mid$(pct)")
+        end
+        cum += s
+    end
+
+    result = DataFrame(time = dates)
+    for sl in labels
+        result[!, "$(outcome_var)_by_$(conditioning_var)_$(sl)"] = zeros(length(dates))
+    end
+
+    for (di, d) in enumerate(dates)
+        sub = filter(row -> row.time == d, df)
+        cond_x = Float64.(sub[!, Symbol(conditioning_var)])
+        out_x = Float64.(sub[!, Symbol(outcome_var)])
+        w = Float64.(sub[!, :weight])
+        means = weighted_conditional_bin_means_simple(out_x, cond_x, w, shares)
+        for (si, sl) in enumerate(labels)
+            result[di, "$(outcome_var)_by_$(conditioning_var)_$(sl)"] = means[si]
+        end
+    end
+    return result
+end
+
+
 function find_tmin_tmax(time_dict, k)
 
     year_max = maximum(keys(time_dict[k]))

@@ -1622,14 +1622,92 @@ function log_transformation(x)
 end
 
 
-function export_functional_data(data_vector, ty, data_name, type, obs_data, func_data, time_params, user_t, model_options, posterior_bounds=false, plot=false, model_step=:inner)
+"""
+    compute_cross_conditional_means(copulas, new_data_pcf, measures, cop_grid; share_spec)
+
+Compute cross-conditional share-group means from the discretized copula and
+already-integrated marginal levels.
+
+Returns a `Dict{String, Matrix{Float64}}` where keys are e.g. `"consum_by_income"`
+and values are `(length(share_spec) × T)` matrices of group means.
+"""
+function compute_cross_conditional_means(
+    copulas,          # D-dim copula density after generate_copula_densities, shape (G,...,G, T)
+    new_data_pcf,     # Vector of D matrices, each (G × T) — already-integrated levels
+    measures,         # sorted measure names (strings)
+    cop_grid::Int;    # G
+    share_spec = [0.5, 0.4, 0.1]
+)
+    D = length(measures)
+    T = size(new_data_pcf[1], 2)
+    cop_shape = ntuple(_ -> cop_grid, D)
+
+    # Map share groups to copula grid index ranges
+    cum_shares = cumsum(share_spec)
+    group_ranges = Vector{UnitRange{Int}}(undef, length(share_spec))
+    for s in eachindex(share_spec)
+        lo_idx = s == 1 ? 1 : floor(Int, cum_shares[s-1] * cop_grid) + 1
+        hi_idx = floor(Int, cum_shares[s] * cop_grid)
+        group_ranges[s] = lo_idx:hi_idx
+    end
+
+    result = Dict{String, Matrix{Float64}}()
+    for (oi, out_meas) in enumerate(measures)
+        for (ci, cond_meas) in enumerate(measures)
+            oi == ci && continue
+            result["$(out_meas)_by_$(cond_meas)"] = zeros(length(share_spec), T)
+        end
+    end
+
+    for t in 1:T
+        cop_t = reshape(copulas[ntuple(_ -> (:), D)..., t], cop_shape)
+
+        for (oi, out_meas) in enumerate(measures)
+            for (ci, cond_meas) in enumerate(measures)
+                oi == ci && continue
+                key = "$(out_meas)_by_$(cond_meas)"
+
+                # Both the outcome and conditioning PCFs must be non-NaN
+                if any(isnan, @view(new_data_pcf[oi][:, t])) ||
+                   any(isnan, @view(new_data_pcf[ci][:, t]))
+                    result[key][:, t] .= NaN
+                    continue
+                end
+
+                # Marginalize copula to the (oi, ci) plane by summing over
+                # all other dimensions, skipping NaN cells.  This handles
+                # data sources that only observe a subset of measures: the
+                # copula density is non-NaN on the observed-measure slice
+                # and NaN elsewhere (see generate_copula_densities).
+                for (si, grp) in enumerate(group_ranges)
+                    num = 0.0; den = 0.0
+                    for idx in CartesianIndices(cop_shape)
+                        idx[ci] in grp || continue
+                        c_val = cop_t[idx]
+                        isnan(c_val) && continue
+                        num += c_val * new_data_pcf[oi][idx[oi], t]
+                        den += c_val
+                    end
+                    result[key][si, t] = den > 0 ? num / den : NaN
+                end
+            end
+        end
+    end
+    return result
+end
+
+
+function export_functional_data(data_vector, ty, data_name, type, obs_data, func_data, time_params, user_t, model_options, posterior_bounds=false, plot=false, model_step=:inner; max_order::Union{Int,Nothing} = nothing)
     """Takes the data, creates a dataframe and exports as csv.
     'ty' is either "normal" or "average" type
     """
 
     @unpack measures, case, equivalized, bottom_coded, estimator, tag = model_options
     @unpack grid_cop, grid_pcf, integral_pcf_grid = estimator
-    sort!(measures) # just in case 
+    sort!(measures) # just in case
+
+    # Resolve max_order: default to full polynomial order from estimator
+    max_order = isnothing(max_order) ? grid_pcf - 1 : min(max_order, grid_pcf - 1)
 
     @unpack tmin, tmax = time_params  # m = model
     @unpack gdp_series = obs_data
@@ -1715,10 +1793,10 @@ function export_functional_data(data_vector, ty, data_name, type, obs_data, func
                     new_data_pcf[m][:, t] .= NaN
                 else
                     for i in 1:integral_pcf_grid
-                        # Using coefs, generate pcf function and then integrate pcf function over diff. intervals 
-                        integral, _ = quadgk(u -> reverse_inverse_hyperbolic_sine(eval_quantile_function(split_pcfs[m][:, t], grid_pcf - 1, u))[1] .* select_series[t, correction_names[m]], intervals[i], intervals[i+1], rtol=1e-8)
+                        # Using coefs, generate pcf function and then integrate pcf function over diff. intervals
+                        integral, _ = quadgk(u -> reverse_inverse_hyperbolic_sine(eval_quantile_function(split_pcfs[m][:, t], max_order, u))[1] .* select_series[t, correction_names[m]], intervals[i], intervals[i+1], rtol=1e-8)
 
-                        # Undo treatment of data => gives us average quantile within the interval 
+                        # Undo treatment of data => gives us average quantile within the interval
                         new_data_pcf[m][i, t] = integral / (intervals[i+1] - intervals[i]) #reverse_inverse_hyperbolic_sine(integral)[1] .* select_series[t, correction_names[m]] #./ (intervals[i+1] - intervals[i])
                     end
                 end
@@ -1730,10 +1808,24 @@ function export_functional_data(data_vector, ty, data_name, type, obs_data, func
         share_intervals = vcat([0.0 + 1e-6], cumsum(share_spec)[1:end-1], [1.0 - 1e-6])
         share_data_pcf = [zeros(length(share_spec), T) for _ in 1:D]
         corr_mat = Matrix(select_series[:, correction_names])
-        integrate_quantile_functions!(share_data_pcf, split_pcfs, grid_pcf, share_intervals, corr_mat)
+        integrate_quantile_functions!(share_data_pcf, split_pcfs, grid_pcf, share_intervals, corr_mat; max_order = max_order)
 
         data_pcf = vcat([new_data_pcf[m] for m in eachindex(new_data_pcf)]...)
+
+        # Save copula coefficients before overwriting with densities
+        copulas_coefs = copy(copulas)
+
         copulas = generate_copula_densities(copulas, measures, integral_cop_grid)
+
+        # Cross-conditional share means on a finer grid (deciles → 10×10×10 = 1000 cells)
+        xcond_grid = 10
+        copulas_xcond = generate_copula_densities(copy(copulas_coefs), measures, xcond_grid)
+        xcond_intervals = vcat([0.0 + 1e-6], select_grid_points(xcond_grid))
+        xcond_pcf = [zeros(xcond_grid, T) for _ in 1:D]
+        integrate_quantile_functions!(xcond_pcf, split_pcfs, grid_pcf, xcond_intervals, corr_mat; max_order = max_order)
+        cross_cond_data = compute_cross_conditional_means(
+            copulas_xcond, xcond_pcf, sort(measures), xcond_grid
+        )
 
         # 'data_cop' is (x, x, x, T). Reshape to (x^d, T)
         data_cop = reshape(copulas, (integral_cop_grid^D, T))
@@ -1790,6 +1882,17 @@ function export_functional_data(data_vector, ty, data_name, type, obs_data, func
         for (i, meas) in enumerate(sort(measures))
             for (si, sl) in enumerate(share_labels)
                 data_dict[meas]["quantiles"]["common series"][sl] = share_data_pcf[i][si, :]
+            end
+        end
+    end
+
+    # Inject cross-conditional share means into data_dict
+    if typeof(estimator) <: SeriesEstimator && @isdefined(cross_cond_data)
+        cross_share_labels = ["bot50", "mid40", "top10"]
+        for (key, mat) in cross_cond_data
+            data_dict[key] = Dict{String, Any}()
+            for (si, sl) in enumerate(cross_share_labels)
+                data_dict[key][sl] = mat[si, :]
             end
         end
     end

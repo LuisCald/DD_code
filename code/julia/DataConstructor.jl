@@ -827,24 +827,29 @@ function series_approximate_copula(period_data, obs_measures, estimator)
 
     cols_to_keep = vcat(obs_measures, "weight")
 
-    # Some data cleaning 
+    # Some data cleaning
     X1 = select(period_data, cols_to_keep) #TODO: may not work with datasets without weights
     X2 = coalesce.(X1, NaN)
     for m in cols_to_keep
         filter!(m => !isnan, X2)
     end
 
-    # Separate data from weights 
-    W = X2.weight
-    select!(X2, obs_measures)
+    # Separate data from weights
+    W = Vector{Float64}(X2.weight)
+    # select!(X2, obs_measures)
 
-    # Rank the data 
-    for i in axes(X2, 2)
-        X2[:, i] = rankdata(X2[:, i]) / (size(X2, 1) + 1)
+    # Convert to Matrix for fast BLAS path
+    R = Matrix{Float64}(X2[:, obs_measures])
+
+    # Rank the data
+    n = size(R, 1)
+    for j in axes(R, 2)
+        R[:, j] .= rankdata(@view(R[:, j])) ./ (n + 1)
     end
 
-    # Series estimate the copula
-    cop_coefs = get_copula_coefficients(X2, W, grid_cop - 1)
+    # Series estimate the copula — vectorized BLAS-based version
+    # cop_coefs = get_copula_coefficients(X2, W, grid_cop - 1)
+    cop_coefs = get_copula_coefficients_fast(R, W, grid_cop - 1)
 
     return cop_coefs[:]
 end
@@ -1283,7 +1288,8 @@ function estimate_phi(R, W, m)
         return 0.0
     end
 
-    Threads.@threads for i in 1:n
+    # Threads.@threads  # removed: called from within threaded bootstrap loop
+    for i in 1:n
         product = 1.0
 
         for j in 1:d
@@ -1313,8 +1319,8 @@ function get_copula_coefficients(X, W, N)
     c_N = 0.0
     rho_m = zeros(cl)
 
-    # Multi-thread this 
-    Threads.@threads for (xx, m) in collect(enumerate(Iterators.product(ranges...)))
+    # Threads.@threads  # removed: called from within threaded bootstrap loop
+    for (xx, m) in collect(enumerate(Iterators.product(ranges...)))
         tup_m = Tuple(m)
         rho_m[xx] = estimate_phi(X, W, tup_m)
     end
@@ -1322,6 +1328,59 @@ function get_copula_coefficients(X, W, N)
     return rho_m
 end
 
+# Vectorized copula coefficient estimation using BLAS matrix operations.
+# Precomputes basis matrices once, then uses matrix multiplies instead of
+# looping over each multi-index with separate N_obs passes.
+# For D=3, N=11: 12 BLAS dgemm calls vs 26M scalar Q_m evaluations.
+function get_copula_coefficients_fast(R_input, W, N)
+    R = R_input isa Matrix ? R_input : Matrix{Float64}(R_input)
+    n, d = size(R)
+    K = N + 1  # number of basis functions per dimension
+
+    # Step 1: Precompute basis matrices Φ_d[i, k] = Q_m(k-1, R[i, d])
+    Phi = [Matrix{Float64}(undef, n, K) for _ in 1:d]
+    for dd in 1:d
+        for i in 1:n
+            @inbounds for k in 1:K
+                Phi[dd][i, k] = Q_m(k - 1, R[i, dd])
+            end
+        end
+    end
+
+    # Step 2: Weighted first-dimension basis: WΦ₁[i, k] = w[i] / sum(W) * Φ₁[i, k]
+    w_sum = sum(W)
+    WPhi1 = Phi[1] .* (W ./ w_sum)
+
+    if d == 2
+        # ρ[k1, k2] = WΦ₁' * Φ₂  — single BLAS dgemm call
+        rho_mat = WPhi1' * Phi[2]
+        rho_m = vec(rho_mat)
+
+    elseif d == 3
+        # For each k3: ρ[:,:,k3] = (WΦ₁ .* Φ₃[:,k3])' * Φ₂
+        rho_arr = Array{Float64}(undef, K, K, K)
+        for k3 in 1:K
+            WPhi1_k3 = WPhi1 .* @view(Phi[3][:, k3])
+            rho_arr[:, :, k3] = WPhi1_k3' * Phi[2]
+        end
+        rho_m = vec(rho_arr)
+    else
+        error("get_copula_coefficients_fast: only d=2 and d=3 supported, got d=$d")
+    end
+
+    # Step 3: Apply special cases
+    # (0,0,...,0) → 1.0 (normalization)
+    rho_m[1] = 1.0
+
+    # Marginal coefficients (d-1 indices are zero, one is non-zero) → 0.0
+    for (xx, m) in enumerate(Iterators.product([(0:N) for _ in 1:d]...))
+        if sum(m .== 0) >= d - 1 && !all(iszero, m)
+            rho_m[xx] = 0.0
+        end
+    end
+
+    return rho_m
+end
 
 
 inverse_hyperbolic_sine(x) = log.(x .+ sqrt.(x .^ 2 .+ 1))

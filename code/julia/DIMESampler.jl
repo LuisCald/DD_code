@@ -10,7 +10,7 @@ function SSM(model_elements, param_sizes, hyperpriors, meas_ind, Σ_ids, model_o
     # _SSM.(vp)
 end
 
-function run_DIME_sampler(model_elements, niter, param_vector, param_sizes, priors, meas_ind, Σ_ids, model_options)
+function run_DIME_sampler(model_elements, niter, param_vector, param_sizes, priors, meas_ind, Σ_ids, model_options; bbo_opttime=length(param_vector) * 3)
     @unpack measures, data_cutoffs, tag = model_options
     label = "3D_A non-diag"
     m_label = measures_folder(measures)
@@ -18,8 +18,7 @@ function run_DIME_sampler(model_elements, niter, param_vector, param_sizes, prio
     # First run tenative optimization
     hyperpriors = priors[end-5:end] #TODO: hardcoded
     BBO(par) = -likeli(model_elements, par, param_sizes, hyperpriors, Σ_ids, model_options)[1]
-    par_final = run_black_box_opt(BBO, param_vector, param_sizes, priors, measures)
-    hyper_params = par_final[end-5:end] #TODO: hardcoded
+    par_final = run_black_box_opt(BBO, param_vector, param_sizes, priors, measures; opttime=bbo_opttime)
 
     # A_new,B_new,Ω_new,Δ_new,G_new, likeli_vec, Δ_log = run_EM_algorithm(param_vector, param_sizes, meas_ind, Σ_ids, model_elements, model_options)
     # @unpack G = model_elements
@@ -50,7 +49,8 @@ function run_DIME_sampler(model_elements, niter, param_vector, param_sizes, prio
 
     # Run MCMC using Gregor's paper 
     LogProbParallel(x) = pmap(log_likeli, eachslice(x, dims=2))  # running an ensemble in parallel (ensemble of chains)
-
+    
+    hyper_params = par_final[end-5:end] #TODO: hardcoded
     nchain = length(param_vector) * 4 # a sane default
     priors = get_priors(model_elements, model_options, hyper_params)
     push!(priors, hyperpriors...) # add hyperpriors to the end of the priors list
@@ -76,7 +76,7 @@ function run_DIME_sampler(model_elements, niter, param_vector, param_sizes, prio
     par_final = find_mode(DIME_chains, lprobs)
     store_optim_estimate(par_final, label, m_label, data_cutoffs, tag)
 
-    # par_final = mean(DIME_chains[end, :, :][:, :], dims=1) # for 'additional factors', its not 3 dimensions ... only kept last iteration  which is fine
+    # par_final3 = mean(DIME_chains[end, :, :][:, :], dims=1) # for 'additional factors', its not 3 dimensions ... only kept last iteration  which is fine
 
     # Generate plot of chains 
     log_LProbs = -1 .* log.(-1 .* lprobs)
@@ -117,22 +117,6 @@ function generate_marginals_for_hyperparameters(DIME_chains, m_label, tag)
         Plots.savefig(init_path * "/7_Results/" * m_label * "$tag" * "/from_mcmc/bayesian_convergence/" * "hyperparameter_optimization_$i.pdf")
     end
 end
-
-
-# # Save just the last 25% of iterations 
-# last_25p    = round(Int, niter * 0.25)
-# DIME_chains = DIME_chains2[end-last_25p:end, :, :]
-
-# # Save the chains, the log probabilities, and the proposal distribution
-# init_path     = dirname(pwd())[end-7:end] == "Dynamics" ? dirname(pwd()) : pwd()
-# jldsave(init_path * "/posterior_draws" * "/" * m_label * "_$tag.jld2"; d_chains = DIME_chains, lprobs=LProbs, propdist=propdist2)
-
-# jldopen(init_path * "/posterior_draws" * "/" * m_label * "_$tag" * "_test.jld2", "w") do file
-#     file["d_chains"] = DIME_chains[end-500, :, :]
-#     file["lprobs"]   = vcat(postd["lprobs"], lprobs)
-#     file["propdist"] = propdist
-# end
-
 
 function find_mode(DIME_chains, lprobs)
     to_keep = size(DIME_chains, 1) - 1

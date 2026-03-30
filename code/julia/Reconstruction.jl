@@ -51,10 +51,18 @@ function reconstruct_data(par_final, param_sizes, hyperpriors, meas_ind, Σ_ids,
     end
     Plots.savefig(init_path * "/7_Results/factor_analysis/distributional_factors$tag.pdf")
 
+    aggregate_rep = hasproperty(model_options, :aggregate_rep) ? model_options.aggregate_rep : :as_states
+
     X = Vector{Matrix{Float64}}(undef, number_of_dfs)
     T = size(x_smoothed, 2)
     for i in eachindex(Gⱼ)
-        X[i] = (Gⱼ[i] * x_smoothed[1:end-agg_count, :])
+        if aggregate_rep == :as_inputs
+            # :as_inputs — x_smoothed is already factor-only (4r rows)
+            X[i] = (Gⱼ[i] * x_smoothed)
+        else
+            # :as_states — slice off aggregate rows from x_smoothed
+            X[i] = (Gⱼ[i] * x_smoothed[1:end-agg_count, :])
+        end
     end
 
     # Split by object, multiply by stds, reform object 
@@ -80,7 +88,31 @@ function reconstruct_data(par_final, param_sizes, hyperpriors, meas_ind, Σ_ids,
         end
     end
 
-    # Create consensus average. 
+    # Save smoothed factors and reconstructed coefficients as wide DataFrames with dates
+    m_label = measures_folder(measures)
+    save_dir = init_path * "/7_Results/$m_label" * "$tag" * "/from_mcmc/data"
+    mkpath(save_dir)
+
+    # 1. Smoothed factors (T × n_factors)
+    factor_df = DataFrame(Matrix(x_smoothed'), ["x$i" for i in 1:size(x_smoothed, 1)])
+    factor_df[!, "time"] = collect(dts)
+    CSV.write(save_dir * "/smoothed_factors.csv", select(factor_df, "time", :))
+
+    # 2. Reconstructed coefficients per data source
+    for (i, ds) in enumerate(data_sources)
+        n_coeff = size(X_dict["normal"][i], 1)
+        col_names = ["x$k" for k in 1:n_coeff]
+
+        df_normal = DataFrame(Matrix(X_dict["normal"][i]'), col_names)
+        df_normal[!, "time"] = collect(dts)
+        CSV.write(save_dir * "/$(ds)_coefficients_normal.csv", select(df_normal, "time", :))
+
+        df_avg = DataFrame(Matrix(X_dict["average"][i]'), col_names)
+        df_avg[!, "time"] = collect(dts)
+        CSV.write(save_dir * "/$(ds)_coefficients_average.csv", select(df_avg, "time", :))
+    end
+
+    # Create consensus average.
     X_array_norm = cat(X_dict["normal"]..., dims=3)
     X_array_avg = cat(X_dict["average"]..., dims=3)
 
@@ -563,11 +595,14 @@ function undo_functional_treatment_validation(estimator, X, grid_pcf, grid_cop, 
 end
 
 
-function perform_proof_of_concept_reconstruction(df, source, years, gdp_series, time_p, freq_type, time_dict_k, model_options)
+function perform_proof_of_concept_reconstruction(df, source, years, gdp_series, time_p, freq_type, time_dict_k, model_options; max_order::Union{Int,Nothing} = nothing)
 
     @unpack lags, measures, freq, plot_proof, pca_perspective, estimator, tag = model_options
     @unpack grid_pcf, grid_cop = estimator
     @unpack tmin, tmax, tot_periods = time_p
+
+    # Resolve max_order: default to full polynomial order from estimator
+    max_order = isnothing(max_order) ? grid_pcf - 1 : min(max_order, grid_pcf - 1)
 
     dimension = length(measures)
 
@@ -672,12 +707,12 @@ function perform_proof_of_concept_reconstruction(df, source, years, gdp_series, 
                     end
                 end
 
-                # Integration 
-                integrate_quantile_functions!(new_data_pcf, split_pcfs, grid_pcf, intervals, correction_vec)
+                # Integration (max_order truncates Legendre series for smoothing)
+                integrate_quantile_functions!(new_data_pcf, split_pcfs, grid_pcf, intervals, correction_vec; max_order = max_order)
                 dv[2] = vcat([new_data_pcf[m] for m in eachindex(new_data_pcf)]...)
 
-                # Integrate densities 
-                dv[1] = generate_copula_densities(deepcopy(dv[1]), measures, grid_size_data_cop) #FIXME: 
+                # Integrate densities
+                dv[1] = generate_copula_densities(deepcopy(dv[1]), measures, grid_size_data_cop) #FIXME:
             end
         end
 
@@ -751,10 +786,11 @@ function generate_copula_densities(X, measures, grid_size_data_cop; given_integr
         if obs_d <= 1
             nothing
         else
-            XX = obs_d == 2 ? [[x[i], x[j]] for i in eachindex(x), j in eachindex(x)] : [[x[i], x[j], x[k]] for i in eachindex(x), j in eachindex(x), k in eachindex(x)]
+            # XX no longer needed — copula_cdf_estimator now uses array indices directly
+            # XX = obs_d == 2 ? [[x[i], x[j]] for i in eachindex(x), j in eachindex(x)] : [[x[i], x[j], x[k]] for i in eachindex(x), j in eachindex(x), k in eachindex(x)]
 
             cop_w = X[cop_ind..., t]
-            cop_cdf = obs_d == 2 ? [copula_cdf_estimator(cop_w, integrals, [XX[i, j][1], XX[i, j][2]]) for i in eachindex(x), j in eachindex(x)] : [copula_cdf_estimator(cop_w, integrals, [XX[i, j, k][1], XX[i, j, k][2], XX[i, j, k][3]]) for i in eachindex(x), j in eachindex(x), k in eachindex(x)]
+            cop_cdf = obs_d == 2 ? [copula_cdf_estimator(cop_w, integrals, [i, j]) for i in eachindex(x), j in eachindex(x)] : [copula_cdf_estimator(cop_w, integrals, [i, j, k]) for i in eachindex(x), j in eachindex(x), k in eachindex(x)]
             new_dv[cop_ind..., t] .= cdf_to_pdf(cop_cdf)
         end
     end
@@ -765,9 +801,10 @@ end
 
 # SINGLE ITERATION ... I KNOW, DUMB, BUT FOR EFFICIENCY REASONS 
 function generate_copula_density(X, XX, id_x, integrals, measures, obs_meas, grid_size_data_cop)
+    # Note: XX is kept in signature for compatibility but no longer used (integrals are array-indexed)
     D = length(size(X))
 
-    # This has to be of the same dimensionality of the estimation 
+    # This has to be of the same dimensionality of the estimation
     obs_cop_size = tuple([grid_size_data_cop for i in 1:D]...) # doesnt affect SeriesEstimator
     new_dv = fill!(Array{Float64}(undef, obs_cop_size...), NaN)
 
@@ -778,7 +815,10 @@ function generate_copula_density(X, XX, id_x, integrals, measures, obs_meas, gri
         return NaN
     else
         cop_w = X[cop_ind...]
-        cop_cdf = obs_d == 2 ? [copula_cdf_estimator(cop_w, integrals, [XX[i, j][1], XX[i, j][2]]) for i in id_x, j in id_x] : [copula_cdf_estimator(cop_w, integrals, [XX[i, j, k][1], XX[i, j, k][2], XX[i, j, k][3]]) for i in id_x, j in id_x, k in id_x]
+        # Old: passed float grid points via XX
+        # cop_cdf = obs_d == 2 ? [copula_cdf_estimator(cop_w, integrals, [XX[i, j][1], XX[i, j][2]]) for i in id_x, j in id_x] : [copula_cdf_estimator(cop_w, integrals, [XX[i, j, k][1], XX[i, j, k][2], XX[i, j, k][3]]) for i in id_x, j in id_x, k in id_x]
+        # New: pass integer indices directly (integrals is now an array, not a Dict)
+        cop_cdf = obs_d == 2 ? [copula_cdf_estimator(cop_w, integrals, [i, j]) for i in id_x, j in id_x] : [copula_cdf_estimator(cop_w, integrals, [i, j, k]) for i in id_x, j in id_x, k in id_x]
         new_dv[cop_ind...] .= cdf_to_pdf(cop_cdf)
 
         return new_dv
@@ -787,26 +827,33 @@ end
 
 
 function precompute_integrals(N, x)
-    integrals = Dict{Tuple{Int,Float64},Float64}()
+    # Old dict-based version:
+    # integrals = Dict{Tuple{Int,Float64},Float64}()
+    # for m in 0:N
+    #     for u in x
+    #         integrals[(m, u)] = integrate_legendre_polynomial(m, u)
+    #     end
+    # end
+    # return integrals
 
-    # for 'm and 'u' unique 
-    for m in 0:N
-        for u in x # the number interval cutoffs
-            integrals[(m, u)] = integrate_legendre_polynomial(m, u)
+    # Array-based version: integral_array[m+1, u_idx] for fast indexing
+    integral_array = zeros(N + 1, length(x))
+    for (ui, u) in enumerate(x)
+        for m in 0:N
+            integral_array[m + 1, ui] = integrate_legendre_polynomial(m, u)
         end
     end
-
-    return integrals
+    return integral_array
 end
 
 
-function copula_cdf_estimator(X, integrals, u)
+function copula_cdf_estimator(X, integrals, u_indices)
     C_N = 0.0
 
-    # Dimension of copula 
+    # Dimension of copula
     d = length(size(X))
 
-    # Order of the object 
+    # Order of the object
     N = size(X, 1) - 1
 
     # Ranges for the object
@@ -815,15 +862,15 @@ function copula_cdf_estimator(X, integrals, u)
     # All possible orders of the object
     m_combos = collect(Iterators.product(ranges...))
 
-    # Look over each weight <==> looping over each m_combos 
-    # Threads.@threads 
+    # Look over each weight <==> looping over each m_combos
+    # Now uses array indexing: integrals[m+1, u_idx] instead of Dict lookup integrals[(m, u)]
     for ci in CartesianIndices(m_combos)
         m = Tuple(m_combos[ci])
         rho_m = X[ci]
         product = 1.0
 
-        for j in 1:d
-            product *= integrals[(m[j], u[j])]
+        @inbounds for j in 1:d
+            product *= integrals[m[j] + 1, u_indices[j]]
         end
 
         C_N += rho_m * product
@@ -850,17 +897,18 @@ function integrate_legendre_polynomial(m, u)
 end
 
 
-function integrate_quantile_functions!(new_data_pcf, split_pcfs, grid_pcf, intervals, agg_corr)
+function integrate_quantile_functions!(new_data_pcf, split_pcfs, grid_pcf, intervals, agg_corr; max_order::Int = grid_pcf - 1)
+    use_order = min(max_order, grid_pcf - 1)
     for m in eachindex(new_data_pcf)
         for t in axes(new_data_pcf[m], 2)
             if all(isnan.(split_pcfs[m][:, t]))
                 new_data_pcf[m][:, t] .= NaN
             else
                 for i in axes(new_data_pcf[m], 1)
-                    # Using coefs, generate pcf function and then integrate pcf function over diff. intervals 
-                    integral, _ = quadgk(u -> reverse_inverse_hyperbolic_sine(eval_quantile_function(split_pcfs[m][:, t], grid_pcf - 1, u))[1] * agg_corr[t, m], intervals[i], intervals[i+1], rtol=1e-8)
+                    # Using coefs, generate pcf function and then integrate pcf function over diff. intervals
+                    integral, _ = quadgk(u -> reverse_inverse_hyperbolic_sine(eval_quantile_function(split_pcfs[m][:, t], use_order, u))[1] * agg_corr[t, m], intervals[i], intervals[i+1], rtol=1e-8)
 
-                    # Undo treatment of data => gives us average quantile within the interval 
+                    # Undo treatment of data => gives us average quantile within the interval
                     new_data_pcf[m][i, t] = integral / (intervals[i+1] - intervals[i])
                 end
             end
@@ -1061,10 +1109,13 @@ function undo_series_estimator_setup(coefficients, estimator, dimension, measure
 end
 
 
-function move_data_to_dict(df, periods, gdp_series, model_options, time_p, data_source, k)
+function move_data_to_dict(df, periods, gdp_series, model_options, time_p, data_source, k; max_order::Union{Int,Nothing} = nothing)
     @unpack estimator, lags, measures, freq, tag = model_options
     @unpack tmin, tmax, tot_years, tot_periods, time_dict, freq_type = time_p
     @unpack grid_pcf, grid_cop = estimator
+
+    # Resolve max_order: default to full polynomial order from estimator
+    max_order = isnothing(max_order) ? grid_pcf - 1 : min(max_order, grid_pcf - 1)
 
     if typeof(estimator) <: SeriesEstimator
         @unpack integral_pcf_grid, integral_cop_grid = estimator
@@ -1115,13 +1166,13 @@ function move_data_to_dict(df, periods, gdp_series, model_options, time_p, data_
             end
         end
 
-        integrate_quantile_functions!(new_data_pcf, split_pcfs, grid_pcf, intervals, correction_vec)
+        integrate_quantile_functions!(new_data_pcf, split_pcfs, grid_pcf, intervals, correction_vec; max_order = max_order)
 
         # Share-group integration: bot50/mid40/top10
         share_spec = [0.5, 0.4, 0.1]
         share_intervals = vcat([0.0 + 1e-6], cumsum(share_spec)[1:end-1], [1.0 - 1e-6])
         share_data_pcf = [zeros(length(share_spec), T) for _ in 1:D]
-        integrate_quantile_functions!(share_data_pcf, split_pcfs, grid_pcf, share_intervals, correction_vec)
+        integrate_quantile_functions!(share_data_pcf, split_pcfs, grid_pcf, share_intervals, correction_vec; max_order = max_order)
 
         # We need to generate new data_pcf, which are the average quantiles over the intervals
         # for m in eachindex(new_data_pcf)
@@ -1178,6 +1229,7 @@ function move_data_to_dict(df, periods, gdp_series, model_options, time_p, data_
         end
     end
 
+
     # Exporting raw data
     export_raw_data(d_data_dict, estimator, data_source, measures, time_p, tag)
 
@@ -1228,14 +1280,14 @@ end
 
 
 
-function store_functional_data(files, dfs, gdp_series, model_options, time_p)
+function store_functional_data(files, dfs, gdp_series, model_options, time_p; max_order::Union{Int,Nothing} = nothing)
     @unpack year_vec, time_dict = time_p
     func_dict = Dict()
     data_sources = sort(collect(keys(files)))
 
     # Stores the data
     for (k, df) in enumerate(dfs)
-        func_dict[data_sources[k]] = move_data_to_dict(df, year_vec[k], gdp_series, model_options, time_p, data_sources[k], k)
+        func_dict[data_sources[k]] = move_data_to_dict(df, year_vec[k], gdp_series, model_options, time_p, data_sources[k], k; max_order = max_order)
     end
 
     return func_dict
@@ -1941,9 +1993,11 @@ function estimate_confidence_intervals!(data, objects, series, years, time_dict,
                     end
                 end
 
-                # Generate copulas  
+                # Generate copulas
                 obs_dims = length(obs_measures)
-                XX = obs_dims == 2 ? [[int_points[i], int_points[j]] for i in id_x, j in id_x] : obs_dims == 3 ? [[int_points[i], int_points[j], int_points[k]] for i in id_x, j in id_x, k in id_x] : [1]
+                # XX no longer needed — copula_cdf_estimator now uses array indices directly
+                # XX = obs_dims == 2 ? [[int_points[i], int_points[j]] for i in id_x, j in id_x] : obs_dims == 3 ? [[int_points[i], int_points[j], int_points[k]] for i in id_x, j in id_x, k in id_x] : [1]
+                XX = nothing  # kept for generate_copula_density signature compatibility
 
                 if dim == obs_dims
                     if occursin("SCF", source)
