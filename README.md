@@ -117,7 +117,6 @@ Using pre-computed estimates (skipping Stage 2), the total runtime is approximat
 │   │   ├── CounterfactualRuns.jl      Counterfactual exercises
 │   │   ├── CyclicalityOfConsumption2.jl  Recession consumption dynamics
 │   │   ├── AllPlots.jl                Proof-of-concept and main figures
-│   │   ├── plot_HANK.jl               HANK model comparison plots
 │   │   ├── CEXFunctions.jl            CEX data utilities
 │   │   ├── MDD.jl                     Marginal data density
 │   │   ├── SupportingFunctions.jl     Utility functions
@@ -215,7 +214,7 @@ The MCMC sampler uses Julia's default random number generator. For exact replica
 | Figure 5 | `AllPlots.jl`: `gen_proof_of_concept_*()` |
 | Figure 6 | `ForecastSSM.jl` |
 | Figure 7 | `CreateTimeSeries.jl`: `generate_specific_plots()` |
-| Figure 8 | `plot_HANK.jl` |
+| Figure 8 | Separate HANK replication package (not included) |
 | Figure 9 | Stata (TBD) |
 | Figure 10 | `OrderAnalysis.jl` |
 | Figure 11 | `OrderAnalysis.jl` |
