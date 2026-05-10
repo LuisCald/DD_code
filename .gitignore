@@ -80,6 +80,9 @@ tmp/
 *.svg
 *.eps
 
+# Keep slide deck PDFs (these are intentionally tracked)
+!slides/**/*.pdf
+
 # Animations
 *.mp4
 *.mov

@@ -161,10 +161,18 @@ Using pre-computed estimates (skipping Stage 2), the total runtime is approximat
 │   ├── synthetic/                     Model-generated microdata (provided)
 │   └── aggregates/                    Public macro data
 │
-└── output/
-    ├── figures/                       Generated figures
-    ├── tables/                        Generated LaTeX tables
-    └── estimates/                     Pre-computed parameter vectors
+├── output/
+│   ├── figures/                       Generated figures
+│   ├── tables/                        Generated LaTeX tables
+│   └── estimates/                     Pre-computed parameter vectors
+│
+├── slides/                            Conference / seminar slide decks
+│   └── brazil/                        Brazil 2026 (full + short 20-min version)
+│
+├── doc/                               Methodological notes
+│   └── linearization_notes.tex
+│
+└── CITATION.cff                       Machine-readable citation
 ```
 
 ## Instructions to Replicators
@@ -234,7 +242,7 @@ The MCMC sampler uses Julia's default random number generator. For exact replica
 
 ## References
 
-Bayer, Christian, Luis Calderon, and Moritz Kuhn. "Distributional Dynamics." CEPR Discussion Paper 19829, 2025.
+Bayer, Christian, Luis Calderon, and Moritz Kuhn. "Distributional Dynamics." CEPR Discussion Paper 19829, 2026.
 
 Board of Governors of the Federal Reserve System. *Survey of Consumer Finances*. Various years (1962-2022). https://www.federalreserve.gov/econres/scfindex.htm.
 
