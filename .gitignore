@@ -57,6 +57,9 @@ tmp/
 *.jld
 *.jld2
 
+# Keep the published synthetic data files (intentionally tracked)
+!data/synthetic/*.csv
+
 # Archives often used to store raw data
 *.zip
 *.7z
