@@ -22,6 +22,8 @@
 
 See [`data/synthetic/README.md`](data/synthetic/README.md) for column naming, file formats, and a quick-start snippet.
 
+**Want to compute custom moments?** [`code/python/reconstruct.py`](code/python/reconstruct.py) is a standalone Python helper (numpy + pandas) that turns the `*_coefficients_*.csv` files into marginal quantile functions $\Xi^{-1}_{m,t}(u)$ and the trivariate copula density $dC_t(u_c, u_y, u_w)$ at arbitrary points.
+
 ---
 
 ## Overview
