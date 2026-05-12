@@ -65,12 +65,13 @@ function gen_proof_of_concept_copulas(d_data_dict::Dict, r_data_dict::Dict, sour
     axis = select_grid_points(integral_cop_grid)
     colons = ntuple(_ -> (:), D)
 
-    # Path stuff 
+    # Path stuff
     init_path = BASE_PATH
     m_label = measures_folder(measures)
     path = init_path * "/7_Results/proof_of_concept/$m_label/"
+    mkpath(path)
 
-    # Generate side by side copulas  
+    # Generate side by side copulas
     grid_tup = tuple([integral_cop_grid for _ in 1:D]...)
     count = D * length(collect(the_periods_id))
     legendfl = [false for _ in 1:count]
@@ -339,6 +340,7 @@ function gen_proof_of_concept_figure(d_data_dict::Dict, r_data_dict::Dict, model
     init_path = BASE_PATH
     m_label = measures_folder(measures)
     path = init_path * "/7_Results/proof_of_concept/$m_label/"
+    mkpath(path)
 
     # Generate functions so their out of the inner scope defined by the if-else control flow
     local series, series_l

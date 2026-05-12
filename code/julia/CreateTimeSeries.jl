@@ -116,6 +116,7 @@ function export_raw_data(data_dict, estimator, source, measures, time_p, tag)
         m_label = measures_folder(measures)
         init_path = BASE_PATH
         path = init_path * "/7_Results/$m_label" * tag * "/other_results/raw_data/"
+        mkpath(path)
         f_cols = filter(e -> e != "time", names(df))
         subset!(df, (f_cols .=> ByRow(x -> !(x isa Number && isnan(x))))...)
 
@@ -171,15 +172,16 @@ end
 function generate_copula_plots(data_dict, func_data, data_name, tmin, tmax, grid, type, measures, label, posterior_bounds)
     @unpack func_dict, year_vec, data_sources = func_data
 
-    # Preliminaries 
+    # Preliminaries
     m_label = measures_folder(measures)
     dimension = length(measures)
     dts = QuarterlyDate(tmin["year"], tmin["quarter"]):Quarter(1):QuarterlyDate(tmax["year"], tmax["quarter"])
     folder = type == :optimization ? "from_optimization" : "from_mcmc"
     init_path = BASE_PATH
-    path = init_path * "/7_Results/$m_label/$folder/copulas/"
+    path = init_path * "/7_Results/$m_label" * tag * "/$folder/copulas/"
+    mkpath(path)
 
-    # Plotting copulas for 3 separate years 
+    # Plotting copulas for 3 separate years
     axis = [1:grid]  # percentile groups 
 
 
@@ -592,6 +594,10 @@ function generate_quantiles_shares_levels_plots(data_dict, ty, func_data, data_n
     folder = type == :optimization ? "from_optimization" : "from_mcmc"
     init_path = BASE_PATH
     path = init_path * "/7_Results/$m_label" * "$tag" * "/$folder/plots/"
+    mkpath(path * "correlations/")
+    for m in measures
+        mkpath(path * "$m/quantiles_levels/")
+    end
 
     local bot, mid, top
     if grid_choice_pcf == 10 || grid_choice_pcf == 100 || grid_choice_pcf == 20
@@ -1607,6 +1613,7 @@ function export_stat_dict_to_latex(within_stat_dict, ty, data_name, path, label)
     filename = path * data_name * "_within_stat_" * detrended_or_not * label * ".tex"
 
     # Write to file
+    mkpath(dirname(filename))
     open(filename, "w") do file
         write(file, string(latex_table))
     end
@@ -1868,6 +1875,7 @@ function export_functional_data(data_vector, ty, data_name, type, obs_data, func
 
         init_path = BASE_PATH
         path = init_path * "/7_Results/$m_label" * "$tag" * "/$folder/data"
+        mkpath(path)
 
         # Export functional data. For 'detrended', the marginals itself are uninformative. It is later divided by the average, which is when its informative.
         CSV.write(path * "/" * data_name * "_functional_data" * data_tag * "$label" * ".csv", select(E, "time", :))
@@ -2269,10 +2277,11 @@ function generate_microdata_implicates(draws, k, param_sizes, priors, meas_ind, 
 
     save_name = k == "CEX_pooled" ? "CEX" : k
 
-    # Export the bounds 
+    # Export the bounds
+    mkpath(init_path * "/7_Results/$m_label" * "$tag" * "/from_mcmc/data")
     jldsave(init_path * "/7_Results/$m_label" * "$tag" * "/from_mcmc/data/" * save_name * "_bounds" * ".jld2"; lb=lower_bound, ub=upper_bound, q_dict=q_dict)
 
-    # Export the data 
+    # Export the data
     path = init_path * "/7_Results/$m_label" * "$tag" * "/from_mcmc/data"
     CSV.write(path * "/" * save_name * "_micro_data_w_imp" * ".csv", micro_full_df)
 end
@@ -2432,6 +2441,7 @@ function export_table_to_tex_with_strings(measures, type)
     folder = type == :optimization ? "from_optimization" : "from_mcmc"
     init_path = BASE_PATH
     path = init_path * "/7_Results/$m_label" * "$tag" * "/$folder/plots/"
+    mkpath(path)
 
     # Get first letter and capitalize from 'measures'
     abv = join([measures[i][1] for i in eachindex(measures)])
@@ -2518,6 +2528,7 @@ function export_table_to_tex_with_strings(measures, type)
 
         # Write the LaTeX table to a .tex file
         filename = path * "correlations/" * "correlations_table_" * data_name * ".tex"
+        mkpath(dirname(filename))
         open(filename, "w") do io
             write(io, table)
         end

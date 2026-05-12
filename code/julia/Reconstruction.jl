@@ -49,6 +49,7 @@ function reconstruct_data(par_final, param_sizes, hyperpriors, meas_ind, Σ_ids,
             label=L"\textrm{Factor \,\, %$(i)}",
             legend=:best) #, xticks=(collect(1:20:tot_periods), [L"%$(date)"[1:5] * "\$" for (_,date) in enumerate(gdp_series[1:20:end, :time])]))
     end
+    mkpath(init_path * "/7_Results/factor_analysis")
     Plots.savefig(init_path * "/7_Results/factor_analysis/distributional_factors$tag.pdf")
 
     aggregate_rep = hasproperty(model_options, :aggregate_rep) ? model_options.aggregate_rep : :as_states
@@ -2354,6 +2355,7 @@ function gen_proof_of_concept_figure_Γ_comparison(d_data_dict, r_data_dict, mod
     init_path = BASE_PATH
     m_label = measures_folder(measures)
     path = init_path * "/7_Results/proof_of_concept/$m_label/"
+    mkpath(path)
 
     # Generate functions so their out of the inner scope defined by the if-else control flow
     local series, series_l

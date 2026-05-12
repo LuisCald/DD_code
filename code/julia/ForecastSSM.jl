@@ -426,10 +426,11 @@ function plot_forecasts(data_dt, data_dt_r, ty, func_data, obs_data, avg_series,
     dates = Dict()
     base_jump, end_jump = find_subset_frame(smin, smax, tmin, tmax)
 
-    # Path situation 
+    # Path situation
     folder = type == :optimization ? "from_optimization" : "from_mcmc"
     init_path = BASE_PATH
     path = init_path * "/7_Results/$m_label" * tag * "/$folder/plots/"
+    mkpath(path)
 
     # Common annual series 
     top = Dict("consensus" => Dict())
@@ -1038,12 +1039,13 @@ function plot_iterative_forecasts(dataset_choice, data_dt, data_dt_r, func_data,
     m_label = measures_folder(measures)
     dates = Dict()
 
-    # Path situation 
+    # Path situation
     folder = type == :optimization ? "from_optimization" : "from_mcmc"
     init_path = BASE_PATH
     path = init_path * "/7_Results/$m_label" * tag * "/$folder/plots/"
+    mkpath(path)
 
-    # # Common annual series 
+    # # Common annual series
     top = Dict()
     bot = Dict()
     mid = Dict()

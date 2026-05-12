@@ -30,6 +30,7 @@ function compare_to_external_sources(dv, ty, func_data, obs_data, user_params, t
     folder = type == :optimization ? "from_optimization" : "from_mcmc"
     init_path = BASE_PATH
     path = init_path * "/7_Results/$m_label" * "$tag" * "/$folder/plots/"
+    mkpath(path)
     series_t = ["top10", "next40", "bottom50"]
 
     # Creating and filling dictionaries to loop over 
@@ -743,6 +744,7 @@ function compare_to_DFA(dv, ty, time_params, type, case, measures, func_dict, gd
 
     # Plot the series against each other, one plot for each dictionary
     path = init_path * "/7_Results/$m_label" * "$tag" * "/$folder/plots/wealth/external_comparisons/"
+    mkpath(path)
 
     series_t = ["top20", "bottom40", "next40"]
     series_y = [["top", "20"], ["bottom", "40"], ["next", "40"]]
@@ -1021,10 +1023,11 @@ function compare_to_data(dv, ty, func_data, obs_data, user_t, time_params, model
         series["top"] = "top20"
     end
 
-    # Path situation 
+    # Path situation
     folder = type == :optimization ? "from_optimization" : "from_mcmc"
     init_path = BASE_PATH
     path = init_path * "/7_Results/$m_label" * "$tag" * "/$folder/plots/"
+    mkpath(path)
 
     dates = Dict()
 
