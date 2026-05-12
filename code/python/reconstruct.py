@@ -256,24 +256,92 @@ def copula_density_from_row(row: np.ndarray, u_c, u_y, u_w) -> float | np.ndarra
 
 
 # -----------------------------------------------------------------------------
-# FactorMap — learn the linear projection
+# FactorMap — map smoothed factors F_t to a coefficient row.
 #
-#     coef_t  =  α  +  β · F_t  +  ε_t       (one OLS per coefficient)
+# Two modes:
 #
-# Inputs: a smoothed_factors.csv (the published latent factors F_t) and one of
-# the *_coefficients_*.csv files (the corresponding coefficient time series).
+# 1. `FactorMap.from_projection(proj_dir, dataset, trend_kind)` — **exact**
+#    reconstruction using the PCA loading matrix Γ exported alongside the
+#    coefficient files. Uses
+#        coef_t = stds ⊙ (Γ · F_dist_t) + means + trend_t
+#    which is exactly what the model's Kalman smoother computes internally.
+#    This is the canonical Distributional_Oil-style projection. Requires
+#    a fresh-style export from the model run (see
+#    `Reconstruction.jl: proj_dir = save_dir * "/projection"`).
 #
-# Once fit, .predict(F) maps any factor vector to a coefficient row, which can
-# be plugged into the row-level evaluators above. Useful for counterfactuals:
-#   "what would the joint distribution look like if F_3 were two SDs higher?"
+# 2. `FactorMap(factors_csv, coefs_csv)` — **OLS approximation**: one
+#    regression per coefficient. No Γ needed; works straight from the
+#    public coefficient + factor files. Cheaper but lossy (R² ≈ 0.2 with
+#    8 factors on the published PSID data).
 #
-# Standardization on the Y side is automatic; the returned row is in the same
-# units as the input coefficients file.
+# In both modes the `.predict / .quantile_at / .copula_density_at` API
+# is the same.
 # -----------------------------------------------------------------------------
 class FactorMap:
-    """Linear OLS map smoothed factors → coefficient row (one regression per coef)."""
+    """Smoothed factors → coefficient row. See module docstring for the two modes."""
 
-    def __init__(
+    # --- Mode A: exact reconstruction from exported PCA loadings -------------
+
+    def __init__(self, *args, **kwargs):
+        if args or kwargs:
+            self._init_ols(*args, **kwargs)
+        else:
+            # Internal use by `from_projection`; do nothing.
+            pass
+
+    @classmethod
+    def from_projection(
+        cls,
+        proj_dir: str | Path,
+        dataset: str,
+        trend_kind: str = "normal",
+    ) -> "FactorMap":
+        """Build an exact factor → coefficient map from the model's PCA artifacts.
+
+        Args:
+            proj_dir: folder containing the projection CSVs (typically
+                `data/synthetic/projection/`).
+            dataset: dataset name, e.g. "PSID", "SCF", "CEX". Must match the
+                file prefix used at export.
+            trend_kind: "normal" (HP-trend, date-anchored) or "average"
+                (time-mean trend, extrapolation-friendly).
+        """
+        proj_dir = Path(proj_dir)
+        if trend_kind not in ("normal", "average"):
+            raise ValueError(f"trend_kind must be 'normal' or 'average', got {trend_kind!r}")
+
+        G = pd.read_csv(proj_dir / f"{dataset}_projection.csv").to_numpy(dtype=float)
+        means = pd.read_csv(proj_dir / f"{dataset}_means.csv")["mean"].to_numpy(dtype=float)
+        stds = pd.read_csv(proj_dir / f"{dataset}_stds.csv")["std"].to_numpy(dtype=float)
+
+        if trend_kind == "normal":
+            tdf = pd.read_csv(proj_dir / f"{dataset}_trend_normal.csv")
+            trend_dates = tdf["time"].astype(str).tolist()
+            trend = tdf.drop(columns=["time"]).to_numpy(dtype=float)  # (T, n_coefs)
+            trend_mode = "normal"
+        else:
+            trend = pd.read_csv(proj_dir / f"{dataset}_trend_average.csv")[
+                "trend_average"
+            ].to_numpy(dtype=float)
+            trend_dates = None
+            trend_mode = "average"
+
+        fm = cls()
+        fm.mode = "projection"
+        fm.G = G                            # (n_coefs, n_dist_state)
+        fm.means = means                    # (n_coefs,)
+        fm.stds = stds                      # (n_coefs,) — already expanded
+        fm.trend = trend                    # (T, n_coefs) or (n_coefs,)
+        fm.trend_dates = trend_dates
+        fm.trend_mode = trend_mode
+        fm.dataset = dataset
+        fm.n_factors = G.shape[1]
+        fm.n_coefs = G.shape[0]
+        return fm
+
+    # --- Mode B: OLS fallback (legacy) ---------------------------------------
+
+    def _init_ols(
         self,
         factors_csv: str | Path,
         coefs_csv: str | Path,
@@ -305,10 +373,6 @@ class FactorMap:
             .loc[common]
             .to_numpy(dtype=float)
         )
-        # Some coefficient files have NaN at periods when the underlying dataset
-        # wasn't observed (e.g., PSID before 1999 for consumption). Drop rows
-        # where ANY coefficient is NaN before fitting — leaves a smaller but
-        # clean training sample.
         valid = ~np.any(np.isnan(Y), axis=1)
         if valid.sum() < n_factors + 2:
             raise ValueError(
@@ -319,14 +383,12 @@ class FactorMap:
         Y_use = Y[valid]
         self.n_obs_used = int(valid.sum())
         self.n_obs_dropped = int((~valid).sum())
-        # Standardize Y per coefficient on the clean subsample.
         self.y_means = Y_use.mean(axis=0)
         self.y_stds = Y_use.std(axis=0, ddof=0)
         safe_stds = np.where(self.y_stds > 0, self.y_stds, 1.0)
         Y_std = (Y_use - self.y_means) / safe_stds
-        # OLS: β includes intercept as the first row.
-        X = np.column_stack([np.ones(len(F_use)), F_use])  # (T, 1 + K)
-        self.beta, *_ = np.linalg.lstsq(X, Y_std, rcond=None)  # (1+K, N)
+        X = np.column_stack([np.ones(len(F_use)), F_use])
+        self.beta, *_ = np.linalg.lstsq(X, Y_std, rcond=None)
         Y_std_hat = X @ self.beta
         ss_res = np.sum((Y_std - Y_std_hat) ** 2, axis=0)
         ss_tot = np.sum(Y_std ** 2, axis=0)
@@ -335,33 +397,58 @@ class FactorMap:
         self.n_factors = n_factors
         self.n_obs = len(common)
         self.dates_used = [d for d, ok in zip(common, valid) if ok]
+        self.mode = "ols"
 
-    def predict(self, factors) -> np.ndarray:
-        """Map factor values to a coefficient row (in the original CSV's units).
+    # --- Shared predict / moments --------------------------------------------
 
-        `factors` may be shape (n_factors,) or (n_points, n_factors).
+    def predict(self, factors, date: str | None = None) -> np.ndarray:
+        """Map factor values to a coefficient row (in the model's natural units).
+
+        `factors` may be shape (n_factors,) or (n_points, n_factors). For
+        projection mode with `trend_kind="normal"`, pass `date` (e.g.
+        ``"2008-Q3"``) to pick the right trend row; without `date`, the
+        first trend row is used (rarely what you want — pass `date`).
         """
         F = np.atleast_2d(np.asarray(factors, dtype=float))
         if F.shape[-1] != self.n_factors:
             raise ValueError(
                 f"factors must have last dim = {self.n_factors}, got {F.shape}"
             )
-        X = np.column_stack([np.ones(F.shape[0]), F])
-        Y_std_hat = X @ self.beta
-        Y_hat = Y_std_hat * self.y_stds + self.y_means
-        return Y_hat[0] if Y_hat.shape[0] == 1 else Y_hat
+        if self.mode == "projection":
+            # coef = stds * (G @ F) + means + trend
+            Y = (self.G @ F.T).T * self.stds + self.means          # (n_pts, n_coefs)
+            if self.trend_mode == "average":
+                Y = Y + self.trend                                  # (n_coefs,)
+            else:
+                if date is None:
+                    Y = Y + self.trend[0]
+                else:
+                    if date not in self.trend_dates:
+                        raise KeyError(
+                            f"date {date!r} not in trend_normal; first/last: "
+                            f"{self.trend_dates[0]!r}..{self.trend_dates[-1]!r}"
+                        )
+                    Y = Y + self.trend[self.trend_dates.index(date)]
+        else:  # mode == "ols"
+            X = np.column_stack([np.ones(F.shape[0]), F])
+            Y_std_hat = X @ self.beta
+            Y = Y_std_hat * self.y_stds + self.y_means
+        return Y[0] if Y.shape[0] == 1 else Y
 
-    # End-to-end convenience methods (factors → moments) -----------------------
+    def quantile_at(self, factors, measure: str, u, date: str | None = None) -> np.ndarray:
+        return quantile_from_row(self.predict(np.atleast_1d(factors), date=date), measure, u)
 
-    def quantile_at(self, factors, measure: str, u) -> np.ndarray:
-        return quantile_from_row(self.predict(np.atleast_1d(factors)), measure, u)
-
-    def copula_density_at(self, factors, u_c, u_y, u_w):
-        return copula_density_from_row(self.predict(np.atleast_1d(factors)), u_c, u_y, u_w)
+    def copula_density_at(self, factors, u_c, u_y, u_w, date: str | None = None):
+        return copula_density_from_row(self.predict(np.atleast_1d(factors), date=date), u_c, u_y, u_w)
 
     def summary(self) -> str:
+        if self.mode == "projection":
+            return (
+                f"FactorMap (projection): dataset={self.dataset}, "
+                f"K={self.n_factors}, n_coefs={self.n_coefs}, trend={self.trend_mode}"
+            )
         return (
-            f"FactorMap: K={self.n_factors}, T_used={self.n_obs_used} "
+            f"FactorMap (OLS): K={self.n_factors}, T_used={self.n_obs_used} "
             f"(dropped {self.n_obs_dropped} NaN rows of {self.n_obs}), "
             f"R² median={float(np.nanmedian(self.r_squared)):.3f}, "
             f"R² P25/P75=({float(np.nanquantile(self.r_squared, 0.25)):.3f}, "

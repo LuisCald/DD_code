@@ -113,6 +113,60 @@ function reconstruct_data(par_final, param_sizes, hyperpriors, meas_ind, Σ_ids,
         CSV.write(save_dir * "/$(ds)_coefficients_average.csv", select(df_avg, "time", :))
     end
 
+    # 3. Projection artifacts per data source — enable exact factor → coefficient
+    #    reconstruction by downstream users (Python/Julia `FactorMap`). The relationship
+    #    encoded by these files is:
+    #        coef_t = stds_per_coef ⊙ (Gⱼ * F_dist_t) + means + trend_t
+    #    where F_dist_t is the distributional portion of the smoothed factors (the
+    #    first `factor_count * 4` entries — the rest are aggregate states).
+    proj_dir = save_dir * "/projection"
+    mkpath(proj_dir)
+    n_dist_state = size(Gⱼ[1], 2)          # factor_count * 4
+    cop_part_n, imm_part_n = retrieve_cop_and_imm_part(estimator, dimension)
+    n_cop_mutable_n = cop_part_n - imm_part_n
+    # Per-coefficient stds expanded to the full 1730-vector (matches Distributional_Oil's
+    # `long_standard_devs_d` ordering: [copula(1694), measure1(grid_pcf), measure2(grid_pcf), …]).
+    function _expand_stds(stds_per_object)
+        out = vcat(
+            fill(stds_per_object[1], n_cop_mutable_n),
+            [fill(stds_per_object[k+1], grid_pcf) for k in 1:dimension]...,
+        )
+        return Vector{Float64}(out)
+    end
+    for (i, ds) in enumerate(data_sources)
+        # G_j: (n_coefs, factor_count*4) per-dataset projection matrix.
+        CSV.write(proj_dir * "/$(ds)_projection.csv",
+            DataFrame(Gⱼ[i], ["f$j" for j in 1:n_dist_state]))
+        # means: length-n_coefs per-coefficient mean.
+        CSV.write(proj_dir * "/$(ds)_means.csv",
+            DataFrame(mean = Vector{Float64}(means[i])))
+        # stds: length-n_coefs (already expanded — easier for users than the 4-vector form).
+        CSV.write(proj_dir * "/$(ds)_stds.csv",
+            DataFrame(std = _expand_stds(stds[i])))
+        # trend (normal): per-coef time series, T × n_coefs (transposed so time is rows).
+        trend_normal_df = DataFrame(Matrix(trend[i]'),
+            ["x$k" for k in 1:size(trend[i], 1)])
+        trend_normal_df[!, "time"] = collect(dts)
+        CSV.write(proj_dir * "/$(ds)_trend_normal.csv",
+            select(trend_normal_df, "time", :))
+        # trend (average): the time-mean (one number per coefficient).
+        CSV.write(proj_dir * "/$(ds)_trend_average.csv",
+            DataFrame(trend_average = Vector{Float64}(new_trend[i])))
+    end
+    # Manifest so consumers know how many factors / states the artifacts assume.
+    open(proj_dir * "/manifest.txt", "w") do io
+        println(io, "n_factors_distributional = ", factor_count)
+        println(io, "state_size_per_dataset = ", n_dist_state, "  (factor_count * 4 lags)")
+        println(io, "n_coefs_per_dataset = ", size(Gⱼ[1], 1))
+        println(io, "datasets = ", join(data_sources, ", "))
+        println(io, "measures = ", join(measures, ", "))
+        println(io, "grid_pcf = ", grid_pcf, ",  grid_cop = ", grid_cop)
+        println(io, "Reconstruction: coef_t = stds ⊙ (Gⱼ * F_dist_t) + means + trend_t")
+        println(io, "  F_dist_t = smoothed_factors_t[1:state_size_per_dataset]")
+        println(io, "Use *_trend_normal.csv for date-anchored reconstruction (1962–2024)")
+        println(io, "Use *_trend_average.csv for extrapolation-friendly reconstruction.")
+    end
+
     # Create consensus average.
     X_array_norm = cat(X_dict["normal"]..., dims=3)
     X_array_avg = cat(X_dict["average"]..., dims=3)

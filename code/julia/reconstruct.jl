@@ -30,6 +30,8 @@ using Statistics
 
 export Reconstruction,
     FactorMap,
+    ProjectionMap,
+    load_projection_map,
     quantile_at,
     copula_density_at,
     copula_density_grid,
@@ -447,7 +449,111 @@ function predict(fm::FactorMap, factors::AbstractVector{<:Real})
 end
 
 
-# End-to-end convenience: factors → moments
+
+# -----------------------------------------------------------------------------
+# ProjectionMap — exact reconstruction via the model's PCA loading matrix.
+#
+#     coef_t = stds ⊙ (Γ · F_dist_t) + means + trend_t
+#
+# Loaded from the `projection/` folder exported by `Reconstruction.jl` at the
+# end of a model run. This is the canonical Distributional_Oil-style map; the
+# OLS `FactorMap` above is an approximation that doesn't require Γ.
+# -----------------------------------------------------------------------------
+"""
+    ProjectionMap
+
+Holds the exported projection artifacts for one dataset (`G`, `means`, `stds`,
+`trend`). Use `load_projection_map(proj_dir, dataset; trend_kind="normal")` to
+construct.
+"""
+struct ProjectionMap
+    G::Matrix{Float64}                   # (n_coefs, n_dist_state)
+    means::Vector{Float64}               # (n_coefs,)
+    stds::Vector{Float64}                # (n_coefs,) — already expanded per coefficient
+    trend::Array{Float64}                # (T, n_coefs) for :normal, or (n_coefs,) for :average
+    trend_dates::Union{Nothing, Vector{String}}
+    trend_mode::Symbol
+    dataset::String
+    n_factors::Int
+    n_coefs::Int
+end
+
+
+"""
+    load_projection_map(proj_dir, dataset; trend_kind="normal")
+
+Read the projection artifacts written by `Reconstruction.jl` for the given
+dataset (e.g., `"PSID"`, `"SCF"`, `"CEX"`).
+
+- `proj_dir`: path to the projection folder (typically
+  `data/synthetic/projection/` or `<run>/from_mcmc/data/projection/`).
+- `trend_kind`: `"normal"` (HP trend, date-anchored — in-sample) or
+  `"average"` (time-mean trend — extrapolation-friendly).
+"""
+function load_projection_map(proj_dir::AbstractString, dataset::AbstractString;
+        trend_kind::AbstractString = "normal")
+    trend_kind in ("normal", "average") ||
+        error("trend_kind must be \"normal\" or \"average\", got $trend_kind")
+    G = Matrix{Float64}(CSV.read(joinpath(proj_dir, "$(dataset)_projection.csv"), DataFrame))
+    means = Vector{Float64}(CSV.read(joinpath(proj_dir, "$(dataset)_means.csv"), DataFrame).mean)
+    stds  = Vector{Float64}(CSV.read(joinpath(proj_dir, "$(dataset)_stds.csv"),  DataFrame).std)
+    if trend_kind == "normal"
+        tdf = CSV.read(joinpath(proj_dir, "$(dataset)_trend_normal.csv"), DataFrame)
+        trend_dates = string.(tdf.time)
+        trend = Matrix{Float64}(select(tdf, Not(:time)))      # (T, n_coefs)
+        trend_mode = :normal
+    else
+        trend = Vector{Float64}(CSV.read(joinpath(proj_dir, "$(dataset)_trend_average.csv"),
+                                          DataFrame).trend_average)
+        trend_dates = nothing
+        trend_mode = :average
+    end
+    return ProjectionMap(G, means, stds, trend, trend_dates, trend_mode,
+                         String(dataset), size(G, 2), size(G, 1))
+end
+
+
+"""
+    predict(pm::ProjectionMap, factors; date=nothing)
+
+Map factor values (length `pm.n_factors`) to a coefficient row. For
+`trend_kind="normal"`, pass `date` (e.g. `"2008-Q3"`) to pick the right trend
+row.
+"""
+function predict(pm::ProjectionMap, factors::AbstractVector{<:Real};
+        date::Union{Nothing, AbstractString} = nothing)
+    length(factors) == pm.n_factors ||
+        error("factors must have length $(pm.n_factors), got $(length(factors))")
+    base = pm.stds .* (pm.G * Vector{Float64}(factors)) .+ pm.means
+    if pm.trend_mode == :average
+        return base .+ pm.trend
+    end
+    # trend_mode == :normal
+    if date === nothing
+        return base .+ vec(pm.trend[1, :])
+    end
+    idx = findfirst(==(String(date)), pm.trend_dates)
+    isnothing(idx) && throw(KeyError("date $date not in trend_normal; first/last: " *
+        "$(pm.trend_dates[1])..$(pm.trend_dates[end])"))
+    return base .+ vec(pm.trend[idx, :])
+end
+
+
+# Shared moment-extractors dispatch on both factor-map types.
+quantile_at(pm::ProjectionMap, factors::AbstractVector{<:Real}, measure::Symbol, u;
+        date::Union{Nothing, AbstractString} = nothing) =
+    quantile_from_row(predict(pm, factors; date), measure, u)
+
+copula_density_at(pm::ProjectionMap, factors::AbstractVector{<:Real}, u_c, u_y, u_w;
+        date::Union{Nothing, AbstractString} = nothing) =
+    copula_density_from_row(predict(pm, factors; date), u_c, u_y, u_w)
+
+summary(pm::ProjectionMap) =
+    "ProjectionMap: dataset=$(pm.dataset), K=$(pm.n_factors), " *
+    "n_coefs=$(pm.n_coefs), trend=$(pm.trend_mode)"
+
+
+# End-to-end convenience: factors → moments (OLS FactorMap)
 quantile_at(fm::FactorMap, factors::AbstractVector{<:Real}, measure::Symbol, u) =
     quantile_from_row(predict(fm, factors), measure, u)
 
