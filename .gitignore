@@ -30,6 +30,9 @@ __pycache__/
 *.pyc
 *.pyo
 
+# Claude Code local settings
+.claude/
+
 # Common build/output folders
 bld/
 build/
