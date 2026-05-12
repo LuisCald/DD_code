@@ -62,65 +62,42 @@ r.copula_density_grid("2008-Q3", n=30)               # 30³ grid for plotting
 r.copula_pmf_grid("2008-Q3")                         # 10³ probability masses (matches the published ciw_*)
 ```
 
-### Factor → coefficient mapping
+### Factor → coefficient mapping (`FactorMap`)
 
-If you want to ask *"what would the joint distribution look like if factor 3 were one standard deviation higher?"*, there are two ways to get a coefficient row from a factor vector. **Prefer the projection mode**, which uses the same linear map the model's Kalman smoother uses internally and is therefore exact.
+The state-space model has a built-in linear map from latent factors to coefficient space: the PCA loading matrix $\Gamma$ that the Kalman smoother uses internally. We export it — together with the per-coefficient means, stds, and trends — at the end of every model run into a `projection/` subfolder. Drop those CSVs into `data/synthetic/projection/` and you can reconstruct any coefficient row exactly:
 
-#### Mode A — exact reconstruction via the model's PCA loadings (Recommended)
-
-The state-space estimator already computes a per-dataset projection matrix $\Gamma_j$. We export it (plus the per-coefficient means, stds, and trends) at the end of every model run into a `projection/` subfolder. Once those CSVs are in `data/synthetic/projection/`, do:
+$$\text{coef}_t = \text{stds} \odot (\Gamma \cdot F^{\text{dist}}_t) + \text{means} + \text{trend}_t$$
 
 ```python
 from reconstruct import FactorMap
-fm = FactorMap.from_projection(
+import numpy as np
+
+fm = FactorMap(
     "data/synthetic/projection/",
     dataset="PSID",          # or "SCF", "CEX"
-    trend_kind="normal",     # "normal" = HP-trend, date-anchored; "average" = time-mean trend
+    trend_kind="normal",     # "normal" = HP-trend, date-anchored
+                             # "average" = time-mean trend (extrapolation-friendly)
 )
-print(fm.summary())          # FactorMap (projection): dataset=PSID, K=8, n_coefs=1730, …
+print(fm.summary())          # FactorMap: dataset=PSID, K=8, n_coefs=1730, trend=normal
 
-import numpy as np
-F = np.zeros(fm.n_factors); F[0] = 1.0    # counterfactual: factor 1 at +1 SD
+# Counterfactual: factor 1 at +1 SD, all others at their mean
+F = np.zeros(fm.n_factors); F[0] = 1.0
 fm.quantile_at(F, "consum", [0.1, 0.5, 0.9], date="2008-Q3")
 fm.copula_density_at(F, 0.5, 0.5, 0.5, date="2008-Q3")
 ```
 
-The `date` argument selects the HP-trend row for `trend_kind="normal"`; with `trend_kind="average"` the trend is a constant per coefficient and `date` is ignored.
+The `date` argument picks the trend row for `trend_kind="normal"`; with `trend_kind="average"` the trend is a single constant per coefficient and `date` is ignored.
 
-Julia mirrors the API:
+$F^{\text{dist}}_t$ is the distributional portion of the smoothed factors (the first $\text{factor\_count} \times 4 = 32$ entries of `smoothed_factors.csv` in the 8-factor model; the remaining columns are aggregate-factor states used elsewhere in the pipeline). The Julia API mirrors Python:
 
 ```julia
-pm = load_projection_map("data/synthetic/projection/", "PSID"; trend_kind="normal")
-println(DistributionalReconstruction.summary(pm))
+fm = FactorMap("data/synthetic/projection/", "PSID"; trend_kind="normal")
+println(DistributionalReconstruction.summary(fm))
 
-F = zeros(pm.n_factors); F[1] = 1.0
-quantile_at(pm, F, :consum, [0.1, 0.5, 0.9]; date="2008-Q3")
-copula_density_at(pm, F, 0.5, 0.5, 0.5; date="2008-Q3")
+F = zeros(fm.n_factors); F[1] = 1.0
+quantile_at(fm, F, :consum, [0.1, 0.5, 0.9]; date="2008-Q3")
+copula_density_at(fm, F, 0.5, 0.5, 0.5; date="2008-Q3")
 ```
-
-Internally the helper computes the same identity that lives inside `Reconstruction.jl`:
-
-$$\text{coef}_t = \text{stds} \odot (\Gamma \cdot F^{\text{dist}}_t) + \text{means} + \text{trend}_t$$
-
-where $F^{\text{dist}}_t$ is the distributional portion of the smoothed factors (the first $\text{factor\_count}\times 4$ entries of `smoothed_factors.csv`). For the published 8-factor model this is the first 32 columns.
-
-#### Mode B — OLS approximation (fallback, no projection files needed)
-
-If you don't have a `projection/` folder (e.g., you're working only from the public coefficient + smoothed factor CSVs), you can fit a quick OLS map. One regression per coefficient, rows with any NaN dropped:
-
-```python
-fm = FactorMap(
-    "data/synthetic/smoothed_factors.csv",
-    "data/synthetic/PSID_coefficients_normal.csv",
-    n_factors=8,                  # 8 distributional factors; use 43 for all
-)
-print(fm.summary())
-# FactorMap (OLS): K=8, T_used=100 (dropped 147 NaN rows of 247), R² median=0.222, …
-```
-
-R² is moderate at K=8 (the OLS is a linear approximation to what PCA + Kalman do). Bumping to `n_factors=43` uses the full file and drives the median R² to ~0.70. The OLS mode does **not** require a `date` argument because the means/stds are estimated from the data directly — there's no trend to re-add.
-
-The two modes have the same `.predict`, `.quantile_at`, `.copula_density_at` API; pick whichever input data you have.
 
 ---
 

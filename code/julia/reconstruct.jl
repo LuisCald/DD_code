@@ -26,12 +26,9 @@ module DistributionalReconstruction
 using CSV
 using DataFrames
 using LinearAlgebra
-using Statistics
 
 export Reconstruction,
     FactorMap,
-    ProjectionMap,
-    load_projection_map,
     quantile_at,
     copula_density_at,
     copula_density_grid,
@@ -361,136 +358,49 @@ end
 
 
 # -----------------------------------------------------------------------------
-# FactorMap — OLS projection from smoothed factors F_t to coefficient row.
-#
-#     coef_t  =  α  +  β · F_t  +  ε_t        (one regression per coef)
-#
-# Useful for counterfactuals: shift a factor, predict the implied coefficient
-# row, then pass that row to `quantile_from_row` / `copula_density_from_row`.
-# -----------------------------------------------------------------------------
-"""
-    FactorMap(factors_csv, coefs_csv; n_factors=8)
-
-Learn the OLS map from the published smoothed factors `F_t` to a coefficient
-time series. After fitting, `predict(fm, F)` maps any factor vector back to a
-1730-element coefficient row.
-
-Rows where any coefficient is `NaN` are dropped from the fit (e.g., PSID has
-no consumption coefficients before 1999); the fit is run on the remaining,
-fully-observed subsample. Use `n_factors = 43` to use all latent factors in
-`smoothed_factors.csv`; the default `8` matches the count of distributional
-factors used in the paper's diagnostics.
-"""
-struct FactorMap
-    beta::Matrix{Float64}                # (1 + n_factors, n_coefs)
-    y_means::Vector{Float64}             # (n_coefs,)
-    y_stds::Vector{Float64}              # (n_coefs,)
-    r_squared::Vector{Float64}           # (n_coefs,)
-    n_factors::Int
-    n_obs_total::Int
-    n_obs_used::Int
-    dates_used::Vector{String}
-end
-
-
-function FactorMap(factors_csv::AbstractString, coefs_csv::AbstractString;
-        n_factors::Int = 8)
-    F_df = CSV.read(factors_csv, DataFrame)
-    Y_df = CSV.read(coefs_csv, DataFrame)
-    for nm in ("time",)
-        nm in names(F_df) || error("$factors_csv missing column 'time'")
-        nm in names(Y_df) || error("$coefs_csv missing column 'time'")
-    end
-    factor_cols = ["x$i" for i in 1:n_factors]
-    missing_cols = [c for c in factor_cols if !(c in names(F_df))]
-    isempty(missing_cols) || error("smoothed_factors.csv missing $(missing_cols)")
-    # Align on common dates
-    F_df.time = string.(F_df.time)
-    Y_df.time = string.(Y_df.time)
-    common = sort(collect(intersect(Set(F_df.time), Set(Y_df.time))))
-    isempty(common) && error("no overlapping dates between factors and coefs")
-    F_df_c = filter(r -> r.time in Set(common), F_df)
-    Y_df_c = filter(r -> r.time in Set(common), Y_df)
-    sort!(F_df_c, :time); sort!(Y_df_c, :time)
-    F = Matrix{Float64}(F_df_c[!, factor_cols])
-    Y = Matrix{Float64}(Y_df_c[!, Not(:time)])
-    # Drop NaN rows
-    valid = .!vec(any(isnan, Y; dims = 2))
-    sum(valid) >= n_factors + 2 ||
-        error("only $(sum(valid)) clean rows; need at least n_factors+2 = $(n_factors + 2)")
-    F_use, Y_use = F[valid, :], Y[valid, :]
-    y_means = vec(mean(Y_use; dims = 1))
-    y_stds  = vec(std(Y_use; dims = 1, corrected = false))
-    safe_stds = ifelse.(y_stds .> 0, y_stds, 1.0)
-    Y_std = (Y_use .- y_means') ./ safe_stds'
-    X = hcat(ones(size(F_use, 1)), F_use)
-    β = X \ Y_std
-    Y_std_hat = X * β
-    ss_res = vec(sum((Y_std .- Y_std_hat) .^ 2; dims = 1))
-    ss_tot = vec(sum(Y_std .^ 2; dims = 1))
-    r2 = [t > 0 ? 1 - r / t : NaN for (r, t) in zip(ss_res, ss_tot)]
-    dates_used = [d for (d, ok) in zip(common, valid) if ok]
-    return FactorMap(β, y_means, y_stds, r2, n_factors, length(common), sum(valid), dates_used)
-end
-
-
-"""
-    predict(fm::FactorMap, factors)
-
-Map factor values (length `fm.n_factors`) back to a coefficient row.
-Returns a Vector{Float64} of length 1730 in the original CSV's units.
-"""
-function predict(fm::FactorMap, factors::AbstractVector{<:Real})
-    length(factors) == fm.n_factors ||
-        error("factors must have length $(fm.n_factors), got $(length(factors))")
-    x = vcat(1.0, Vector{Float64}(factors))     # (1 + K,)
-    y_std_hat = vec(x' * fm.beta)               # (n_coefs,)
-    return y_std_hat .* fm.y_stds .+ fm.y_means
-end
-
-
-
-# -----------------------------------------------------------------------------
-# ProjectionMap — exact reconstruction via the model's PCA loading matrix.
+# FactorMap — exact reconstruction of a coefficient row from the smoothed
+# factors, using the PCA loading matrix Γ that the model's Kalman smoother
+# uses internally. Identity:
 #
 #     coef_t = stds ⊙ (Γ · F_dist_t) + means + trend_t
 #
-# Loaded from the `projection/` folder exported by `Reconstruction.jl` at the
-# end of a model run. This is the canonical Distributional_Oil-style map; the
-# OLS `FactorMap` above is an approximation that doesn't require Γ.
+# Constructed from the `projection/` folder written by `Reconstruction.jl`
+# at the end of every model run.
 # -----------------------------------------------------------------------------
 """
-    ProjectionMap
+    FactorMap(proj_dir, dataset; trend_kind="normal")
 
-Holds the exported projection artifacts for one dataset (`G`, `means`, `stds`,
-`trend`). Use `load_projection_map(proj_dir, dataset; trend_kind="normal")` to
-construct.
+Load the per-dataset projection artifacts and build a factor → coefficient map.
+
+* `proj_dir` — folder of projection CSVs (typically
+  `data/synthetic/projection/` or `<run>/from_mcmc/data/projection/`).
+* `dataset` — `"PSID"`, `"SCF"`, `"CEX"`, etc. (matches the file prefix).
+* `trend_kind` — `"normal"` (HP trend, date-anchored — in-sample) or
+  `"average"` (time-mean trend — extrapolation-friendly).
+
+After construction, use:
+
+```julia
+fm = FactorMap("data/synthetic/projection/", "PSID"; trend_kind="normal")
+F  = zeros(fm.n_factors); F[1] = 1.0
+quantile_at(fm, F, :consum, [0.1, 0.5, 0.9]; date="2008-Q3")
+copula_density_at(fm, F, 0.5, 0.5, 0.5; date="2008-Q3")
+```
 """
-struct ProjectionMap
+struct FactorMap
     G::Matrix{Float64}                   # (n_coefs, n_dist_state)
     means::Vector{Float64}               # (n_coefs,)
-    stds::Vector{Float64}                # (n_coefs,) — already expanded per coefficient
+    stds::Vector{Float64}                # (n_coefs,) — expanded per coefficient
     trend::Array{Float64}                # (T, n_coefs) for :normal, or (n_coefs,) for :average
     trend_dates::Union{Nothing, Vector{String}}
-    trend_mode::Symbol
+    trend_kind::Symbol
     dataset::String
     n_factors::Int
     n_coefs::Int
 end
 
 
-"""
-    load_projection_map(proj_dir, dataset; trend_kind="normal")
-
-Read the projection artifacts written by `Reconstruction.jl` for the given
-dataset (e.g., `"PSID"`, `"SCF"`, `"CEX"`).
-
-- `proj_dir`: path to the projection folder (typically
-  `data/synthetic/projection/` or `<run>/from_mcmc/data/projection/`).
-- `trend_kind`: `"normal"` (HP trend, date-anchored — in-sample) or
-  `"average"` (time-mean trend — extrapolation-friendly).
-"""
-function load_projection_map(proj_dir::AbstractString, dataset::AbstractString;
+function FactorMap(proj_dir::AbstractString, dataset::AbstractString;
         trend_kind::AbstractString = "normal")
     trend_kind in ("normal", "average") ||
         error("trend_kind must be \"normal\" or \"average\", got $trend_kind")
@@ -501,74 +411,56 @@ function load_projection_map(proj_dir::AbstractString, dataset::AbstractString;
         tdf = CSV.read(joinpath(proj_dir, "$(dataset)_trend_normal.csv"), DataFrame)
         trend_dates = string.(tdf.time)
         trend = Matrix{Float64}(select(tdf, Not(:time)))      # (T, n_coefs)
-        trend_mode = :normal
+        kind = :normal
     else
         trend = Vector{Float64}(CSV.read(joinpath(proj_dir, "$(dataset)_trend_average.csv"),
                                           DataFrame).trend_average)
         trend_dates = nothing
-        trend_mode = :average
+        kind = :average
     end
-    return ProjectionMap(G, means, stds, trend, trend_dates, trend_mode,
-                         String(dataset), size(G, 2), size(G, 1))
+    return FactorMap(G, means, stds, trend, trend_dates, kind,
+                     String(dataset), size(G, 2), size(G, 1))
 end
 
 
 """
-    predict(pm::ProjectionMap, factors; date=nothing)
+    predict(fm::FactorMap, factors; date=nothing)
 
-Map factor values (length `pm.n_factors`) to a coefficient row. For
-`trend_kind="normal"`, pass `date` (e.g. `"2008-Q3"`) to pick the right trend
-row.
+Map factor values (length `fm.n_factors`) to a coefficient row. For
+`trend_kind="normal"`, pass `date` (e.g. `"2008-Q3"`) to pick the trend row.
 """
-function predict(pm::ProjectionMap, factors::AbstractVector{<:Real};
+function predict(fm::FactorMap, factors::AbstractVector{<:Real};
         date::Union{Nothing, AbstractString} = nothing)
-    length(factors) == pm.n_factors ||
-        error("factors must have length $(pm.n_factors), got $(length(factors))")
-    base = pm.stds .* (pm.G * Vector{Float64}(factors)) .+ pm.means
-    if pm.trend_mode == :average
-        return base .+ pm.trend
+    length(factors) == fm.n_factors ||
+        error("factors must have length $(fm.n_factors), got $(length(factors))")
+    base = fm.stds .* (fm.G * Vector{Float64}(factors)) .+ fm.means
+    if fm.trend_kind == :average
+        return base .+ fm.trend
     end
-    # trend_mode == :normal
-    if date === nothing
-        return base .+ vec(pm.trend[1, :])
+    # trend_kind == :normal
+    idx = if date === nothing
+        1
+    else
+        i = findfirst(==(String(date)), fm.trend_dates)
+        isnothing(i) && throw(KeyError("date $date not in trend_normal; first/last: " *
+            "$(fm.trend_dates[1])..$(fm.trend_dates[end])"))
+        i
     end
-    idx = findfirst(==(String(date)), pm.trend_dates)
-    isnothing(idx) && throw(KeyError("date $date not in trend_normal; first/last: " *
-        "$(pm.trend_dates[1])..$(pm.trend_dates[end])"))
-    return base .+ vec(pm.trend[idx, :])
+    return base .+ vec(fm.trend[idx, :])
 end
 
 
-# Shared moment-extractors dispatch on both factor-map types.
-quantile_at(pm::ProjectionMap, factors::AbstractVector{<:Real}, measure::Symbol, u;
+quantile_at(fm::FactorMap, factors::AbstractVector{<:Real}, measure::Symbol, u;
         date::Union{Nothing, AbstractString} = nothing) =
-    quantile_from_row(predict(pm, factors; date), measure, u)
+    quantile_from_row(predict(fm, factors; date), measure, u)
 
-copula_density_at(pm::ProjectionMap, factors::AbstractVector{<:Real}, u_c, u_y, u_w;
+copula_density_at(fm::FactorMap, factors::AbstractVector{<:Real}, u_c, u_y, u_w;
         date::Union{Nothing, AbstractString} = nothing) =
-    copula_density_from_row(predict(pm, factors; date), u_c, u_y, u_w)
+    copula_density_from_row(predict(fm, factors; date), u_c, u_y, u_w)
 
-summary(pm::ProjectionMap) =
-    "ProjectionMap: dataset=$(pm.dataset), K=$(pm.n_factors), " *
-    "n_coefs=$(pm.n_coefs), trend=$(pm.trend_mode)"
-
-
-# End-to-end convenience: factors → moments (OLS FactorMap)
-quantile_at(fm::FactorMap, factors::AbstractVector{<:Real}, measure::Symbol, u) =
-    quantile_from_row(predict(fm, factors), measure, u)
-
-copula_density_at(fm::FactorMap, factors::AbstractVector{<:Real}, u_c, u_y, u_w) =
-    copula_density_from_row(predict(fm, factors), u_c, u_y, u_w)
-
-
-function summary(fm::FactorMap)
-    med  = median(filter(!isnan, fm.r_squared))
-    qs   = quantile(filter(!isnan, fm.r_squared), [0.25, 0.75])
-    return "FactorMap: K=$(fm.n_factors), T_used=$(fm.n_obs_used) " *
-           "(dropped $(fm.n_obs_total - fm.n_obs_used) NaN rows of $(fm.n_obs_total)), " *
-           "R² median=$(round(med, digits = 3)), " *
-           "R² P25/P75=($(round(qs[1], digits = 3)), $(round(qs[2], digits = 3)))"
-end
+summary(fm::FactorMap) =
+    "FactorMap: dataset=$(fm.dataset), K=$(fm.n_factors), " *
+    "n_coefs=$(fm.n_coefs), trend=$(fm.trend_kind)"
 
 
 end # module
