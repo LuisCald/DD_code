@@ -285,7 +285,7 @@ function nber_event_masks(panel_dates)
 end
 
 
-function make_hd_tables(cube, order, ids, years, quarters; make_recession_plots=false)
+function make_hd_tables(cube, order, ids, years, quarters; make_recession_plots=false, out_dir::AbstractString=".")
     # NBER recession periods (peak-to-trough) in YYYYQ format
     panel_dates = [quarter_to_date(y, q) for (y, q) in zip(years, quarters)]
     factor_prefix = "f"
@@ -544,8 +544,9 @@ function make_hd_tables(cube, order, ids, years, quarters; make_recession_plots=
                 dpi=500,
             )
 
-            Plots.savefig(p1, "hd_recessions_$(tf)_pre2000s.pdf")
-            Plots.savefig(p2, "hd_recessions_$(tf).pdf")
+            mkpath(out_dir)
+            Plots.savefig(p1, joinpath(out_dir, "hd_recessions_$(tf)_pre2000s.pdf"))
+            Plots.savefig(p2, joinpath(out_dir, "hd_recessions_$(tf).pdf"))
             i += 1
         end
     end

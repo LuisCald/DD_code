@@ -297,7 +297,7 @@ end
 
 
 function compare_to_nonmissing(dv, c_dv, time_params, user_t, model_options)
-    @unpack measures, grid, case, equivalized, bottom_coded, estimation_object, blind_to = model_options
+    @unpack measures, grid, case, equivalized, bottom_coded, estimation_object, blind_to, tag = model_options
     equiv     = equivalized == true ? "eq" : ""
     botcod    = !isempty(bottom_coded) ? "bc" : ""
     label     = "$case" * "_$equiv" * "$botcod"
@@ -310,13 +310,14 @@ function compare_to_nonmissing(dv, c_dv, time_params, user_t, model_options)
     @assert smin["year"] >= tmin["year"]
     @assert smax["year"] <= tmax["year"]
 
-    dts       = QuarterlyDate(tmin["year"], tmin["quarter"]) : Quarter(1) : QuarterlyDate(tmax["year"], tmax["quarter"]) 
+    dts       = QuarterlyDate(tmin["year"], tmin["quarter"]) : Quarter(1) : QuarterlyDate(tmax["year"], tmax["quarter"])
     init_path = BASE_PATH
-    path      = init_path * "/7_Results/$m_label/other_results/counterfactuals/from_missing_information/correlations/"
+    path      = init_path * "/7_Results/$m_label" * tag * "/other_results/counterfactuals/from_missing_information/correlations/"
+    mkpath(path)
     xaxis     = collect(1:length(dts))
 
     # Distinguishing by plots. m = missing 
-    generate_m_shares_levels_quantiles(dv, c_dv, smin["year"], smax["year"], tmin, tmax, grid, label, measures, blind_to) 
+    generate_m_shares_levels_quantiles(dv, c_dv, smin["year"], smax["year"], tmin, tmax, grid, label, measures, blind_to, tag)
 
     # Exporting Kendalls Tau 
     D              = length(measures)
@@ -439,16 +440,20 @@ end
 # end
 
 
-function generate_m_shares_levels_quantiles(data_dict, counterfactuals_data_dict, smin, smax, tmin, tmax, grid, label, measures, blind_to) 
+function generate_m_shares_levels_quantiles(data_dict, counterfactuals_data_dict, smin, smax, tmin, tmax, grid, label, measures, blind_to, run_tag="") 
     # Subset data for the reconstruction 
     base_jump = (smin - tmin["year"]) * 4 + 1  
     end_jump  = (tmax["year"] - smax) * 4  
     m_label   = measures_folder(measures)
 
     # Dates and such
-    dts       = QuarterlyDate(smin, tmin["quarter"]) : Quarter(1) : QuarterlyDate(smax, tmax["quarter"]) 
+    dts       = QuarterlyDate(smin, tmin["quarter"]) : Quarter(1) : QuarterlyDate(smax, tmax["quarter"])
     init_path = BASE_PATH
-    path      = init_path * "/7_Results/$m_label/other_results/counterfactuals/from_missing_information/"
+    path      = init_path * "/7_Results/$m_label" * run_tag * "/other_results/counterfactuals/from_missing_information/"
+    for m in measures
+        mkpath(path * "/$m/quantiles_levels/")
+        mkpath(path * "/$m/shares/")
+    end
     xaxis     = collect(1:length(dts))
 
     # Import hh_gdp 
@@ -630,9 +635,12 @@ function generate_c_shares_levels_quantiles(data_dict, counterfactuals_data_dict
     m_label   = measures_folder(measures)
 
     # Dates and such
-    dts       = QuarterlyDate(smin, tmin["quarter"]) : Quarter(1) : QuarterlyDate(smax, tmax["quarter"]) 
+    dts       = QuarterlyDate(smin, tmin["quarter"]) : Quarter(1) : QuarterlyDate(smax, tmax["quarter"])
     init_path = BASE_PATH
     path      = init_path * "/7_Results/$m_label" * tag * "/other_results/counterfactuals/from_aggregates/"
+    for m in measures
+        mkpath(path * "/$m/quantiles_levels/")
+    end
     xaxis     = collect(1:length(dts))
 
     # Importing HH GDP 

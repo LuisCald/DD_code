@@ -54,10 +54,11 @@ function create_micro_df(copula_obj, pcfs, data_tag, k, folder, time_params, met
         println(ee)
     end
 
-    # Export the data 
+    # Export the data
     m_label = measures_folder(measures)
     init_path = BASE_PATH
     path = init_path * "/7_Results/$m_label" * "$tag" * "/$folder/data"
+    mkpath(path)
     equiv = equivalized == true ? "eq" : ""
     botcod = !isempty(bottom_coded) ? "bc" : ""
     label = "_$case" * "_$equiv" * "$botcod"
@@ -71,7 +72,7 @@ end
 
 
 function kendalls_tau(copula_obj, pcfs, k, folder, time_params, method_options, return_option, plot_tau, plot_data, gdp_series)
-    @unpack measures, equivalized, bottom_coded, case, grid = method_options
+    @unpack measures, equivalized, bottom_coded, case, grid, tag = method_options
     @unpack tmin, tmax = time_params
     @unpack confidence_intervals = func_data
 
@@ -172,9 +173,10 @@ function kendalls_tau(copula_obj, pcfs, k, folder, time_params, method_options, 
     label = "_$case" * "_$equiv" * "$botcod"
     line_sty = [:solid :dash :dot :dashdot :dashdotdot]
 
-    # Export 
+    # Export
     init_path = BASE_PATH
-    path = init_path * "/7_Results/$m_label/$folder/data"
+    path = init_path * "/7_Results/$m_label" * tag * "/$folder/data"
+    mkpath(path)
     CSV.write(path * "/" * k * "_kendalls_tau" * "$label" * ".csv", select(kend_tau, "time", :))
     CSV.write(path * "/" * k * "_pearson" * "$label" * ".csv", select(pwcorr, "time", :))
     CSV.write(path * "/" * k * "_micro_data" * "$label" * ".csv", micro_full_df)
@@ -269,10 +271,11 @@ function kendalls_tau(copula_obj, pcfs, k, folder, time_params, method_options, 
     if plot_tau == true
         local path
         if length(folder) > 17
-            path = init_path * "/7_Results/$m_label/$folder/correlations"
+            path = init_path * "/7_Results/$m_label" * tag * "/$folder/correlations"
         else
-            path = init_path * "/7_Results/$m_label/$folder/plots/correlations"
+            path = init_path * "/7_Results/$m_label" * tag * "/$folder/plots/correlations"
         end
+        mkpath(path)
 
         # Plotting Kendalls Tau 
         if plot_data == false # so no empirical data in the plot 
@@ -901,7 +904,7 @@ end
 
 
 function compute_tail_dependence(copula_obj, pcfs, data_name, folder, time_params, method_options)
-    @unpack measures, equivalized, bottom_coded, case, grid = method_options
+    @unpack measures, equivalized, bottom_coded, case, grid, tag = method_options
     @unpack tmin, tmax = time_params
 
     # Some params and initialization of the tail dependence vectors
@@ -940,9 +943,10 @@ function compute_tail_dependence(copula_obj, pcfs, data_name, folder, time_param
         botcod = !isempty(bottom_coded) ? "bc" : ""
         label = "_$case" * "_$equiv" * "$botcod"
 
-        # Export 
+        # Export
         init_path = BASE_PATH
-        path = init_path * "/7_Results/$m_label/$folder/data"
+        path = init_path * "/7_Results/$m_label" * tag * "/$folder/data"
+        mkpath(path)
         CSV.write(path * "/" * data_name * "_tail_dependence" * "$label" * ".csv", select(tail_dep, "time", :))
 
         # Plot Tail Dependence 
@@ -972,7 +976,8 @@ function compute_tail_dependence(copula_obj, pcfs, data_name, folder, time_param
         mid_point = floor(Int, grid / 2)
         Plots.vline!([mid_point], yformatter=:latex, linestyle=:dash, linecolor=:grey, label="")
 
-        path = init_path * "/7_Results/$m_label/$folder/plots/correlations"
+        path = init_path * "/7_Results/$m_label" * tag * "/$folder/plots/correlations"
+        mkpath(path)
         Plots.savefig(path * "/" * data_name * "_tail_dependence" * "$label" * ".pdf")
 
 
@@ -1027,9 +1032,10 @@ function compute_tail_dependence(copula_obj, pcfs, data_name, folder, time_param
         botcod = !isempty(bottom_coded) ? "bc" : ""
         label = "_$case" * "_$equiv" * "$botcod"
         init_path = BASE_PATH
-        path = init_path * "/7_Results/$m_label/$folder/data"
+        path = init_path * "/7_Results/$m_label" * tag * "/$folder/data"
+        mkpath(path)
 
-        # Export tail_dep_l and tail_dep_u to excel # TODO: to check indices 
+        # Export tail_dep_l and tail_dep_u to excel # TODO: to check indices
         half_way_p = floor(Int, grid / 2)
         for (cc, c) in enumerate(combs)
             println(c)
@@ -1072,7 +1078,8 @@ function compute_tail_dependence(copula_obj, pcfs, data_name, folder, time_param
             # Plots.plot!(1:grid-1, tail_mat[seq[end], :], xformatter=:latex, yformatter=:latex,  label = L"%$(q_dates[seq[end]])"[1:5] * "\$", lw=2, dpi=500)
             Plots.vline!([half_way_p], yformatter=:latex, linestyle=:dash, linecolor=:grey, label="")
 
-            path = init_path * "/7_Results/$m_label/$folder/plots/correlations"
+            path = init_path * "/7_Results/$m_label" * tag * "/$folder/plots/correlations"
+            mkpath(path)
             Plots.savefig(path * "/" * data_name * "_" * c * "_tail_dependence" * "$label" * ".pdf")
         end
     end

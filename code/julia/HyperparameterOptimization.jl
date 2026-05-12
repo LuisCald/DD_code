@@ -129,6 +129,7 @@ function hyperparameter_optimization(hyperpriors, model_elements, time_p, model_
     hyper_par_final = find_mode(DIME_chains, lprobs)
 
     # Save file of DIME_chains, lprobs, and hyper_par_final
+    mkpath(init_path * "/7_Results/" * m_label * "$tag" * "/from_mcmc/bayesian_convergence")
     jldsave(init_path * "/7_Results/" * m_label * "$tag" * "/from_mcmc/bayesian_convergence/" * "hyperparameter_opt.jld2"; d_chains=DIME_chains, lprobs=lprobs, hyper_par_final=hyper_par_final)
 
 

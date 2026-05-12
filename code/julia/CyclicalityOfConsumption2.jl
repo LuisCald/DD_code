@@ -83,9 +83,9 @@
 
 # generate_relative_to_peak_plots()
 
-function generate_relative_to_peak_plots()
+function generate_relative_to_peak_plots(; tag::AbstractString="")
 
-    # Import recession dates 
+    # Import recession dates
     init_path  = DATA_PROCESSING
     nber_dates = CSV.read(init_path * "/nber_dates.csv", DataFrame)
 
@@ -150,12 +150,13 @@ function generate_relative_to_peak_plots()
     sets_of_measures = [["consum", "income", "wealth"]]
     opttag = "from_mcmc"
 
-    for m_set in sets_of_measures 
+    for m_set in sets_of_measures
         measures_folder       = m_set[1] * "_and_" * m_set[2] * "_and_" * m_set[3]
-        file_path             = BASE_PATH * "/7_Results/$(measures_folder)/$opttag/data/PSID_micro_data_A non-diag_.csv"
+        file_path             = BASE_PATH * "/7_Results/$(measures_folder)" * tag * "/$opttag/data/PSID_micro_data_A non-diag_.csv"
         micro_data            = CSV.read(file_path, DataFrame)
         micro_data[!, "time"] = QuarterlyDate.(micro_data[!, "time"])
-        plot_path             = BASE_PATH * "/7_Results/consumption_cyclicality"
+        plot_path             = BASE_PATH * "/7_Results/consumption_cyclicality" * tag
+        mkpath(plot_path)
 
         # For cop_share, zero out the values that are less than 0 
         # micro_data[!, "cop_share"] = [x < 0 ? 0 : x for x in micro_data[!, "cop_share"]]

@@ -69,6 +69,7 @@ function run_DIME_sampler(model_elements, niter, param_vector, param_sizes, prio
 
     # Save the chains, the log probabilities, and the proposal distribution
     init_path = BASE_PATH
+    mkpath(init_path * "/posterior_draws")
     jldsave(init_path * "/posterior_draws" * "/" * m_label * "_$tag.jld2"; d_chains=DIME_chains, lprobs=lprobs, propdist=propdist)
     # jldopen(init_path * "/posterior_draws" * "/" * m_label * "_$tag" * ".jld2", "r")
 
@@ -83,6 +84,7 @@ function run_DIME_sampler(model_elements, niter, param_vector, param_sizes, prio
 
     Plots.plot(log_LProbs[:, :], color="orange4", alpha=0.05, xformatter=:latex, yformatter=:latex, xlabel=L"\textrm{Iterations}", ylabel=L"\textrm{Log-likelihood}", legend=false)
     Plots.plot!(maximum(log_LProbs) * ones(size(log_LProbs, 1)), color="blue3", lw=1)
+    mkpath(init_path * "/7_Results/" * m_label * "$tag" * "/from_mcmc/bayesian_convergence")
     Plots.savefig(init_path * "/7_Results/" * m_label * "$tag" * "/from_mcmc/bayesian_convergence/log_probs.pdf")
 
     # MDD 

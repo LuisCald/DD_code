@@ -418,8 +418,9 @@ function reconstruct_data_short(A_new,B_new,Ω_new,Δ_new,G_new, likeli_vec, Δ_
 
         Plots.scatter(likeli_vec[2:end], msc=:grey, mc=:white, xformatter=:latex, yformatter=:latex, label="", ylabel=L"\textrm{Log\,\,Likelihood}", xlabel=L"\textrm{Iterations}", legend=:best)
         Plots.plot!(likeli_vec[2:end], lc=:blue, label=L"\textrm{Convergence\,\,Path}")
+        mkpath(init_path * "/7_Results/$m_label" * "$tag" * "/other_results")
         Plots.savefig(init_path * "/7_Results/$m_label" * "$tag" * "/other_results/likelihood_convergence" * ".pdf")
-    
+
         Plots.scatter(Δ_log[2:end], msc=:grey, mc=:white, xformatter=:latex, yformatter=:latex, label="", ylabel=L"\textrm{\Delta\,\,\mathcal{l}_{\bar{k}}}", xlabel=L"\textrm{Iterations}", legend=:best)
         Plots.plot!(Δ_log[2:end], lc=:orange, label=L"\textrm{Convergence\,\,Path}")
         Plots.savefig(init_path * "/7_Results/$m_label" * "$tag" * "/other_results/delta_log" * ".pdf")
@@ -449,6 +450,7 @@ function reconstruct_data_short(A_new,B_new,Ω_new,Δ_new,G_new, likeli_vec, Δ_
                 label=L"\textrm{Factor \,\, %$(i)}", 
                 legend=:best) #, xticks=(collect(1:20:tot_periods), [L"%$(date)"[1:5] * "\$" for (_,date) in enumerate(gdp_series[1:20:end, :time])]))
         end
+        mkpath(init_path * "/7_Results/factor_analysis")
         Plots.savefig(init_path * "/7_Results/factor_analysis/distributional_factors $tag.pdf")
         # TODO: undo this later
         # condition = isnan.(means[1])

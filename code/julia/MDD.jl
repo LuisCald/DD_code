@@ -89,6 +89,7 @@ function run_mdd(tag, model_elements, m_label, param_sizes, priors, meas_ind, Σ
 
     # Save in a jld2 file
     init_path = BASE_PATH
+    mkpath(init_path * "/7_Results/MDD")
     jldsave(init_path * "/7_Results/MDD" * "/" * "mdd_$tag.jld2"; mdd_hm=mdd_hm, mdd_bs=mdd_bs)
 end
 
